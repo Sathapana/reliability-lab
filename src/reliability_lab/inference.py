@@ -297,7 +297,7 @@ def kalpha_replicates(pool: KalphaPool, draws: IntArray, redraws: IntArray) -> F
         second = d[:, pool.second_pick]
         d[:, pool.second_pick] = np.where(first == second, redraws, second)
     alpha = 1.0 - (pool.errors[d] * pool.weights).sum(axis=1)
-    return np.maximum(alpha, -1.0)
+    return np.asarray(np.maximum(alpha, -1.0), dtype=float)
 
 
 def kalpha_distribution(pool: KalphaPool, rng: np.random.Generator, n: int) -> FloatArray:
