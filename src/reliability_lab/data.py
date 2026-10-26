@@ -193,6 +193,11 @@ class RatingFrame:
         """A copy of the validated table, with canonical column names."""
         return self._data.copy()
 
+    def _subset(self, mask: npt.NDArray[np.bool_]) -> RatingFrame:
+        """The rows selected by a boolean mask. Every row and per-unit check that
+        held for the whole frame still holds for a subset, so nothing is re-run."""
+        return RatingFrame(self._data[mask].copy(), self._declared, self._implicit_status)
+
     def observed_values(self) -> list[Any]:
         """Distinct observed values, sorted when they are mutually comparable.
 

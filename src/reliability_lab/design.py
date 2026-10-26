@@ -64,7 +64,8 @@ DESIGN_NOTES: dict[Design, str] = {
 _NOT_YET: dict[Design, str] = {
     Design.HUMAN_LLM_ALIGNMENT: "human-LLM alignment (mixed panels) is planned for v0.2",
     Design.CONFIGURATION_CHANGE: (
-        "configuration_change is a paired comparison; it arrives with study.compare() in phase 2"
+        "configuration_change is a paired comparison, not a single-alpha design: declare the "
+        "design each configuration is measured under and call study.compare(a=..., b=...)"
     ),
     Design.ORDER_ROBUSTNESS: "order_robustness arrives with the LLM workflows in phase 4",
 }

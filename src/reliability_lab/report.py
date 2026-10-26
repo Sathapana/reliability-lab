@@ -1,4 +1,4 @@
-"""Typed results: alpha estimates, coverage diagnostics and their serialisation.
+"""Typed results: alpha estimates, intervals, comparisons and their serialisation.
 
 File output (JSON, Parquet) and the provenance manifest arrive in phase 3. For now
 results convert to JSON-safe dicts and pandas tables.
@@ -7,14 +7,24 @@ results convert to JSON-safe dicts and pandas tables.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
-from dataclasses import dataclass
-from typing import Any
+import warnings
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 
 from reliability_lab._version import __version__
+from reliability_lab.exceptions import ReliabilityLabError, ReliabilityWarning
+
+if TYPE_CHECKING:
+    from reliability_lab.inference import StudySample
+
+Scheme = Literal["units", "kalpha"]
+Level = Literal["unit", "group"]
+Method = Literal["percentile", "bca"]
 
 
 @dataclass(frozen=True)
@@ -23,6 +33,15 @@ class RecordedWarning:
 
     category: str
     message: str
+
+
+def emit(category: type[ReliabilityWarning], message: str, stacklevel: int) -> RecordedWarning:
+    """Raise a warning now and return a record of it for the result.
+
+    ``stacklevel`` counts from the caller of ``emit``, as in ``warnings.warn``.
+    """
+    warnings.warn(message, category, stacklevel=stacklevel + 1)
+    return RecordedWarning(category.__name__, message)
 
 
 @dataclass(frozen=True, eq=False)
@@ -134,6 +153,7 @@ class AlphaResult:
     coverage: Coverage
     warnings: tuple[RecordedWarning, ...]
     notes: tuple[str, ...]
+    _sample: StudySample | None = field(default=None, repr=False)
 
     @property
     def alpha(self) -> float:
@@ -142,6 +162,53 @@ class AlphaResult:
 
     def __getitem__(self, name: str) -> AlphaEstimate:
         return self.estimates[name]
+
+    def bootstrap(
+        self,
+        *,
+        scheme: Scheme,
+        n_resamples: int = 2000,
+        confidence: float = 0.95,
+        level: Level | None = None,
+        strata: bool = False,
+        method: Method = "percentile",
+        alpha_min: float | None = None,
+        random_state: int | np.random.Generator | None = None,
+    ) -> BootstrapResult:
+        """Confidence intervals for every estimate, by a named resampling scheme.
+
+        ``scheme`` is required, so no interval is reported without its method:
+
+        - ``"units"`` resamples whole units, or whole groups (``level="group"``, the
+          default when groups are declared), optionally within declared strata.
+          D_e is recomputed in every replicate.
+        - ``"kalpha"`` follows Krippendorff's KALPHA algorithm: it resamples pairs
+          of values and holds D_e at its observed value.
+
+        ``method="bca"`` (units scheme only) is experimental until coverage
+        simulations validate it for alpha. ``alpha_min`` adds the share of
+        replicates below that minimum. All estimates use the same resamples, so
+        their intervals are paired.
+        """
+        from reliability_lab.inference import bootstrap
+
+        if self._sample is None:
+            raise ReliabilityLabError(
+                "this result has no data attached; bootstrap a result returned by "
+                "ReliabilityStudy.alpha()"
+            )
+        return bootstrap(
+            self,
+            self._sample,
+            scheme=scheme,
+            n_resamples=n_resamples,
+            confidence=confidence,
+            level=level,
+            strata=strata,
+            method=method,
+            alpha_min=alpha_min,
+            random_state=random_state,
+        )
 
     def to_frame(self) -> pd.DataFrame:
         """One row per estimate."""
@@ -161,7 +228,7 @@ class AlphaResult:
                 "inapplicable_as": self.inapplicable_as,
                 "estimates": {k: e.to_dict() for k, e in self.estimates.items()},
                 "coverage": self.coverage.to_dict(),
-                "warnings": [{"category": w.category, "message": w.message} for w in self.warnings],
+                "warnings": _warning_dicts(self.warnings),
                 "notes": list(self.notes),
             }
         )
@@ -197,13 +264,246 @@ class AlphaResult:
                     f"{e.name}: {e.n_unanchored} failed attempts sit in units with no other "
                     "value and stay missing."
                 )
-        if self.warnings:
-            lines.append("\nWarnings")
-            lines.extend(f"  - {w.category}: {w.message}" for w in self.warnings)
-        if self.notes:
-            lines.append("\nNotes")
-            lines.extend(f"  - {n}" for n in self.notes)
+        _append_warnings_and_notes(lines, self.warnings, self.notes)
         return "\n".join(lines)
+
+
+@dataclass(frozen=True, eq=False)
+class Interval:
+    """A bootstrap interval for one estimate, or for a difference of estimates.
+
+    ``n_failed`` counts replicates where alpha was undefined; the interval uses the
+    others. ``p_below_min`` is the share of defined replicates below ``alpha_min``,
+    when one was given. ``distribution`` holds every replicate (NaN for failures).
+    """
+
+    estimate: str
+    point: float
+    low: float
+    high: float
+    n_resamples: int
+    n_failed: int
+    p_below_min: float | None = None
+    undefined_reason: str | None = None
+    distribution: npt.NDArray[np.float64] = field(default_factory=lambda: np.empty(0), repr=False)
+
+    @property
+    def defined(self) -> bool:
+        return self.undefined_reason is None
+
+    def summary_row(self) -> dict[str, Any]:
+        return {
+            "estimate": self.estimate,
+            "point": self.point,
+            "low": self.low,
+            "high": self.high,
+            "n_resamples": self.n_resamples,
+            "n_failed": self.n_failed,
+            "p_below_min": self.p_below_min,
+            "undefined_reason": self.undefined_reason,
+        }
+
+    def to_dict(self, include_distribution: bool = False) -> dict[str, Any]:
+        out = self.summary_row()
+        if include_distribution:
+            out["distribution"] = self.distribution.tolist()
+        return _jsonable(out)  # type: ignore[no-any-return]
+
+
+@dataclass(frozen=True, eq=False)
+class BootstrapResult:
+    """Bootstrap intervals for every estimate of one study.
+
+    ``level`` is None for the KALPHA scheme, which resamples pairs of values rather
+    than units. ``seed`` reproduces the resamples when passed back as
+    ``random_state``.
+    """
+
+    scheme: str
+    level: str | None
+    strata: bool
+    method: str
+    confidence: float
+    n_resamples: int
+    seed: int
+    alpha_min: float | None
+    experimental: bool
+    n_clusters: int | None
+    design: str
+    measurement: str
+    intervals: Mapping[str, Interval]
+    warnings: tuple[RecordedWarning, ...]
+    notes: tuple[str, ...]
+
+    def __getitem__(self, name: str) -> Interval:
+        return self.intervals[name]
+
+    def describe(self) -> str:
+        """One line naming the scheme, method, level and seed."""
+        if self.scheme == "kalpha":
+            how = "scheme kalpha (pairs of values, D_e fixed)"
+        else:
+            within = " within strata" if self.strata else ""
+            how = f"scheme units (resampling {self.n_clusters} {self.level}s{within})"
+        flag = " [experimental]" if self.experimental else ""
+        return (
+            f"{how} | method {self.method}{flag} | {self.confidence:.0%} | "
+            f"{self.n_resamples} resamples | seed {self.seed}"
+        )
+
+    def to_frame(self) -> pd.DataFrame:
+        """One row per estimate."""
+        return pd.DataFrame([i.summary_row() for i in self.intervals.values()])
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "scheme": self.scheme,
+            "level": self.level,
+            "strata": self.strata,
+            "method": self.method,
+            "experimental": self.experimental,
+            "confidence": self.confidence,
+            "n_resamples": self.n_resamples,
+            "seed": self.seed,
+            "alpha_min": self.alpha_min,
+            "n_clusters": self.n_clusters,
+        }
+
+    def to_dict(self, include_distribution: bool = False) -> dict[str, Any]:
+        return _jsonable(  # type: ignore[no-any-return]
+            {
+                "kind": "bootstrap_result",
+                "reliability_lab_version": __version__,
+                "design": self.design,
+                "measurement": self.measurement,
+                **self.metadata(),
+                "intervals": {
+                    k: i.to_dict(include_distribution) for k, i in self.intervals.items()
+                },
+                "warnings": _warning_dicts(self.warnings),
+                "notes": list(self.notes),
+            }
+        )
+
+    def summary(self) -> str:
+        with_min = self.alpha_min is not None
+        lines = [
+            f"Bootstrap intervals | design: {self.design} | measurement: {self.measurement}",
+            self.describe(),
+            "",
+            f"{'estimate':<26}{'alpha':>8}{'low':>9}{'high':>9}{'failed':>8}"
+            + (f"{'P(<min)':>9}" if with_min else ""),
+        ]
+        for i in self.intervals.values():
+            p = i.p_below_min if i.p_below_min is not None else math.nan
+            lines.append(
+                f"{i.estimate:<26}{_fmt(i.point):>8}{_fmt(i.low):>9}{_fmt(i.high):>9}"
+                f"{i.n_failed:>8}" + (f"{_fmt(p):>9}" if with_min else "")
+            )
+        lines.extend(_interval_footnotes(self.intervals.values()))
+        _append_warnings_and_notes(lines, self.warnings, self.notes)
+        return "\n".join(lines)
+
+
+@dataclass(frozen=True, eq=False)
+class ComparisonResult:
+    """A paired comparison of two configurations on the same units.
+
+    ``differences`` holds intervals on alpha_b - alpha_a, computed from the same
+    resampled units or groups in every replicate. ``arm_a`` and ``arm_b`` hold each
+    configuration's own intervals from those same resamples, and ``result_a`` and
+    ``result_b`` the arms' full alpha results.
+    """
+
+    claim: str
+    a: Mapping[str, Any]
+    b: Mapping[str, Any]
+    design: str
+    measurement: str
+    result_a: AlphaResult
+    result_b: AlphaResult
+    arm_a: BootstrapResult
+    arm_b: BootstrapResult
+    differences: Mapping[str, Interval]
+    warnings: tuple[RecordedWarning, ...]
+    notes: tuple[str, ...]
+
+    def __getitem__(self, name: str) -> Interval:
+        return self.differences[name]
+
+    def to_frame(self) -> pd.DataFrame:
+        """One row per estimate: each arm's alpha and the difference interval."""
+        rows = []
+        for name, diff in self.differences.items():
+            row: dict[str, Any] = {
+                "estimate": name,
+                "alpha_a": self.arm_a[name].point,
+                "alpha_b": self.arm_b[name].point,
+            }
+            row.update({f"diff_{k}": v for k, v in diff.summary_row().items() if k != "estimate"})
+            rows.append(row)
+        return pd.DataFrame(rows)
+
+    def to_dict(self, include_distribution: bool = False) -> dict[str, Any]:
+        return _jsonable(  # type: ignore[no-any-return]
+            {
+                "kind": "comparison_result",
+                "reliability_lab_version": __version__,
+                "claim": self.claim,
+                "a": dict(self.a),
+                "b": dict(self.b),
+                "design": self.design,
+                "measurement": self.measurement,
+                **self.arm_a.metadata(),
+                "differences": {
+                    k: i.to_dict(include_distribution) for k, i in self.differences.items()
+                },
+                "arm_a": self.arm_a.to_dict(include_distribution),
+                "arm_b": self.arm_b.to_dict(include_distribution),
+                "warnings": _warning_dicts(self.warnings),
+                "notes": list(self.notes),
+            }
+        )
+
+    def summary(self) -> str:
+        lines = [
+            f"Paired comparison (claim: {self.claim}) | design: {self.design} | "
+            f"measurement: {self.measurement}",
+            f"a: {dict(self.a)} | b: {dict(self.b)} | difference = b - a",
+            self.arm_a.describe(),
+            "",
+            f"{'estimate':<26}{'alpha_a':>9}{'alpha_b':>9}{'diff':>9}{'low':>9}{'high':>9}"
+            f"{'failed':>8}",
+        ]
+        for name, d in self.differences.items():
+            lines.append(
+                f"{name:<26}{_fmt(self.arm_a[name].point):>9}{_fmt(self.arm_b[name].point):>9}"
+                f"{_fmt(d.point):>9}{_fmt(d.low):>9}{_fmt(d.high):>9}{d.n_failed:>8}"
+            )
+        lines.extend(_interval_footnotes(self.differences.values()))
+        _append_warnings_and_notes(lines, self.warnings, self.notes)
+        return "\n".join(lines)
+
+
+def _interval_footnotes(intervals: Iterable[Interval]) -> list[str]:
+    return [
+        f"{i.estimate}: no interval, {i.undefined_reason}." for i in intervals if i.undefined_reason
+    ]
+
+
+def _append_warnings_and_notes(
+    lines: list[str], warns: tuple[RecordedWarning, ...], notes: tuple[str, ...]
+) -> None:
+    if warns:
+        lines.append("\nWarnings")
+        lines.extend(f"  - {w.category}: {w.message}" for w in warns)
+    if notes:
+        lines.append("\nNotes")
+        lines.extend(f"  - {n}" for n in notes)
+
+
+def _warning_dicts(warns: tuple[RecordedWarning, ...]) -> list[dict[str, str]]:
+    return [{"category": w.category, "message": w.message} for w in warns]
 
 
 def _fmt(x: float) -> str:

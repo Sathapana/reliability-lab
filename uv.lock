@@ -1150,7 +1150,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.1" },
     { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=15" },
     { name = "scikit-learn", marker = "extra == 'sklearn'", specifier = ">=1.4" },
-    { name = "scipy", specifier = ">=1.11" },
+    { name = "scipy", specifier = ">=1.15" },
 ]
 provides-extras = ["parquet", "sklearn"]
 

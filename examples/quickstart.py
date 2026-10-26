@@ -51,3 +51,8 @@ print("\nCoincidence matrix (ordinal):")
 print(result["as_missing"].coincidence.round(3))
 print("\nUnits ranked by disagreement:")
 print(result["as_missing"].per_unit.sort_values("disagreement", ascending=False).head(5))
+
+# Two bootstrap schemes, always named. With 12 units the intervals are wide.
+for scheme in ("units", "kalpha"):
+    print()
+    print(result.bootstrap(scheme=scheme, n_resamples=2000, random_state=7).summary())

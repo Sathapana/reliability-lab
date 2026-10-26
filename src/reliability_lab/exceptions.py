@@ -31,3 +31,8 @@ class CategorySkewWarning(ReliabilityWarning):
 
 class DomainSizeWarning(ReliabilityWarning):
     """The value domain is large enough to make V x V matrices costly."""
+
+
+class BootstrapWarning(ReliabilityWarning):
+    """An interval needs care: failed replicates, a resampling level that ignores
+    declared groups, or an experimental method."""

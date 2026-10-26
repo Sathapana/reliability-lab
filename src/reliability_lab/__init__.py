@@ -5,6 +5,7 @@ from reliability_lab.alpha import INTERVAL, NOMINAL, ORDINAL, RATIO, Distance
 from reliability_lab.data import RatingFrame, Status
 from reliability_lab.design import CoderSpec, Design
 from reliability_lab.exceptions import (
+    BootstrapWarning,
     CategorySkewWarning,
     CoderDependenceWarning,
     DesignError,
@@ -14,7 +15,14 @@ from reliability_lab.exceptions import (
     SchemaError,
     UndefinedAlphaError,
 )
-from reliability_lab.report import AlphaEstimate, AlphaResult, Coverage
+from reliability_lab.report import (
+    AlphaEstimate,
+    AlphaResult,
+    BootstrapResult,
+    ComparisonResult,
+    Coverage,
+    Interval,
+)
 from reliability_lab.study import ReliabilityStudy
 
 __all__ = [
@@ -24,14 +32,18 @@ __all__ = [
     "RATIO",
     "AlphaEstimate",
     "AlphaResult",
+    "BootstrapResult",
+    "BootstrapWarning",
     "CategorySkewWarning",
     "CoderDependenceWarning",
     "CoderSpec",
+    "ComparisonResult",
     "Coverage",
     "Design",
     "DesignError",
     "Distance",
     "DomainSizeWarning",
+    "Interval",
     "RatingFrame",
     "ReliabilityLabError",
     "ReliabilityStudy",

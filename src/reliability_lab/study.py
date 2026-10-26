@@ -9,8 +9,7 @@ study, and those inherit its declarations.
 from __future__ import annotations
 
 import math
-import warnings
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 import numpy as np
@@ -33,10 +32,20 @@ from reliability_lab.exceptions import (
     CategorySkewWarning,
     DesignError,
     DomainSizeWarning,
-    ReliabilityWarning,
     UndefinedAlphaError,
 )
-from reliability_lab.report import AlphaEstimate, AlphaResult, Coverage, RecordedWarning
+from reliability_lab.inference import EstimateInput, StudySample
+from reliability_lab.inference import compare as compare_arms
+from reliability_lab.report import (
+    AlphaEstimate,
+    AlphaResult,
+    ComparisonResult,
+    Coverage,
+    Level,
+    Method,
+    RecordedWarning,
+    emit,
+)
 
 MissingPolicy = Literal["as_missing", "as_category", "sensitivity"]
 
@@ -47,6 +56,14 @@ ERROR_CATEGORY = "<error>"
 SKEW_THRESHOLD = 0.9
 #: Declares that abstentions or inapplicable items are treated as missing.
 MISSING = "missing"
+#: Fields that may select the arms of a paired comparison.
+SELECTOR_FIELDS: tuple[str, ...] = (
+    "rater_id",
+    "model_id",
+    "model_family",
+    "condition_id",
+    "run_id",
+)
 
 IntArray = npt.NDArray[np.intp]
 
@@ -105,14 +122,14 @@ class ReliabilityStudy:
         self._distance.matrix(self._values, np.ones(len(self._values)))
         size_message = check_domain_size(len(self._values))
         if size_message:
-            self._warnings.append(_emit(DomainSizeWarning, size_message, stacklevel=2))
+            self._warnings.append(emit(DomainSizeWarning, size_message, stacklevel=2))
         self._coders = coders if isinstance(coders, CoderSpec) else CoderSpec(coders)
         self._design = _resolve_design(design)
 
         coder_labels = self._coders.labels(ratings)
         check = check_design(self._design, ratings, self._coders, coder_labels)
         for category, message in check.warnings:
-            self._warnings.append(_emit(category, message, stacklevel=2))
+            self._warnings.append(emit(category, message, stacklevel=2))
         self._notes = check.notes
 
         data = ratings._data
@@ -135,6 +152,12 @@ class ReliabilityStudy:
         self._coder_codes: IntArray = np.asarray(coder_codes, dtype=np.intp)
         self._coder_names = np.asarray(coder_names, dtype=object)
         self._value_idx = self._code_values(data)
+        # Group and stratum are constant within a unit, so the first row tells.
+        first_rows = np.unique(self._unit_codes, return_index=True)[1]
+        self._unit_groups, self._unit_strata = (
+            data[field].to_numpy(dtype=object)[first_rows] if field in ratings.declared else None
+            for field in ("group_id", "stratum")
+        )
 
     # -- declarations -------------------------------------------------------------
 
@@ -195,9 +218,13 @@ class ReliabilityStudy:
         base = self._value_idx >= 0
         reference = self._compute(self._unit_codes[base], self._value_idx[base], self._values)
         estimates: dict[str, AlphaEstimate] = {}
+        inputs: dict[str, EstimateInput] = {}
         for policy in self._policies:
             if policy == "as_missing":
                 estimates["as_missing"] = self._estimate("as_missing", reference, self._values)
+                inputs["as_missing"] = EstimateInput(
+                    self._unit_codes[base], self._value_idx[base], self._values
+                )
             elif policy == "as_category":
                 values = (*self._values, ERROR_CATEGORY)
                 codes = self._value_idx.copy()
@@ -205,11 +232,15 @@ class ReliabilityStudy:
                 keep = codes >= 0
                 computed = self._compute(self._unit_codes[keep], codes[keep], values)
                 estimates["as_category"] = self._estimate("as_category", computed, values)
+                inputs["as_category"] = EstimateInput(self._unit_codes[keep], codes[keep], values)
             else:
                 for variant in ("pessimistic", "optimistic"):
                     codes, n_imputed, n_unanchored = self._impute(reference, variant)
                     keep = codes >= 0
                     computed = self._compute(self._unit_codes[keep], codes[keep], self._values)
+                    inputs[f"sensitivity_{variant}"] = EstimateInput(
+                        self._unit_codes[keep], codes[keep], self._values
+                    )
                     estimates[f"sensitivity_{variant}"] = self._estimate(
                         "sensitivity",
                         computed,
@@ -228,7 +259,7 @@ class ReliabilityStudy:
         recorded = list(self._warnings)
         skew = _skew_message(primary)
         if skew:
-            recorded.append(_emit(CategorySkewWarning, skew, stacklevel=2))
+            recorded.append(emit(CategorySkewWarning, skew, stacklevel=2))
         notes = list(self._notes)
         if not self._is_error.any() and len(self._policies) > 1:
             notes.append("There are no failed attempts, so every missing-data policy coincides.")
@@ -245,9 +276,107 @@ class ReliabilityStudy:
             coverage=self._coverage(),
             warnings=tuple(recorded),
             notes=tuple(notes),
+            _sample=StudySample(
+                unit_labels=self._unit_labels,
+                unit_groups=self._unit_groups,
+                unit_strata=self._unit_strata,
+                distance=self._distance,
+                inputs=inputs,
+            ),
+        )
+
+    def compare(
+        self,
+        a: Mapping[str, Any],
+        b: Mapping[str, Any],
+        *,
+        n_resamples: int = 2000,
+        confidence: float = 0.95,
+        level: Level | None = None,
+        strata: bool = False,
+        method: Method = "percentile",
+        random_state: int | np.random.Generator | None = None,
+        scheme: str = "units",
+    ) -> ComparisonResult:
+        """Paired comparison of two configurations on the same units.
+
+        ``a`` and ``b`` select rows by field, for example
+        ``{"condition_id": "prompt_v1"}``; a value may also be a list. Each arm is
+        a study on its rows that inherits every declaration of this one. Both arms
+        must cover exactly the same units, because different item sets answer a
+        different question. Every replicate resamples the same units (or groups)
+        for both arms, and the interval is placed on alpha_b - alpha_a. Only the
+        units scheme has a paired form.
+        """
+        if scheme != "units":
+            raise DesignError(
+                "paired comparisons use scheme='units' only: KALPHA resamples pairs of "
+                "values, which has no paired form"
+            )
+        mask_a, mask_b = self._select(a, "a"), self._select(b, "b")
+        overlap = self._ratings._data.index[mask_a & mask_b]
+        if len(overlap):
+            raise DesignError(
+                f"{len(overlap)} rows are selected by both a and b {preview(overlap)}; the "
+                "configurations must be disjoint"
+            )
+        arm_a, arm_b = self._derive(mask_a), self._derive(mask_b)
+        units_a, units_b = set(arm_a._unit_labels), set(arm_b._unit_labels)
+        if units_a != units_b:
+            only_a, only_b = sorted(units_a - units_b, key=str), sorted(units_b - units_a, key=str)
+            raise DesignError(
+                "a paired comparison needs the same units in both configurations; "
+                f"{len(only_a)} units appear only in a {preview(only_a)} and {len(only_b)} only "
+                f"in b {preview(only_b)}. Filter the ratings to the shared units first."
+            )
+        return compare_arms(
+            arm_a.alpha(),
+            arm_b.alpha(),
+            a=dict(a),
+            b=dict(b),
+            n_resamples=n_resamples,
+            confidence=confidence,
+            level=level,
+            strata=strata,
+            method=method,
+            random_state=random_state,
         )
 
     # -- internals ----------------------------------------------------------------
+
+    def _select(self, selector: Mapping[str, Any], name: str) -> npt.NDArray[np.bool_]:
+        """Rows matching every field of a comparison selector."""
+        if not isinstance(selector, Mapping) or not selector:
+            raise DesignError(f"{name} must be a non-empty mapping of field to value(s)")
+        data = self._ratings._data
+        mask = np.ones(len(data), dtype=bool)
+        for field, wanted in selector.items():
+            if field not in SELECTOR_FIELDS:
+                raise DesignError(
+                    f"{name} selects on {field!r}; selectors may use {list(SELECTOR_FIELDS)}"
+                )
+            if field not in self._ratings.declared:
+                raise DesignError(f"{name} selects on {field!r}, which was not mapped")
+            options = (
+                list(wanted) if isinstance(wanted, list | tuple | set | frozenset) else [wanted]
+            )
+            mask &= data[field].isin(options).to_numpy()
+        if not mask.any():
+            raise DesignError(f"{name}={dict(selector)} selects no rows")
+        return mask
+
+    def _derive(self, mask: npt.NDArray[np.bool_]) -> ReliabilityStudy:
+        """A study on a subset of rows that inherits every declaration of this one."""
+        return ReliabilityStudy(
+            self._ratings._subset(mask),
+            measurement=self._distance,
+            values=self._values,
+            coders=self._coders,
+            design=self._design,
+            missing_policies=self._policies,  # type: ignore[arg-type]
+            abstain_as=self._abstain_as,
+            inapplicable_as=self._inapplicable_as,
+        )
 
     def _code_values(self, data: pd.DataFrame) -> IntArray:
         """Domain index of each row's value, or -1 when the row carries no value."""
@@ -379,12 +508,6 @@ class ReliabilityStudy:
             status_counts={s: int(table[s].sum()) for s in statuses},
             per_coder=per_coder,
         )
-
-
-def _emit(category: type[ReliabilityWarning], message: str, stacklevel: int) -> RecordedWarning:
-    """Raise a warning now and return a record of it for the result."""
-    warnings.warn(message, category, stacklevel=stacklevel + 1)
-    return RecordedWarning(category.__name__, message)
 
 
 def _skew_message(estimate: AlphaEstimate) -> str | None:

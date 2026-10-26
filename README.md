@@ -7,9 +7,11 @@ reliability-lab is a study-design library for measuring the reliability of LLM a
 - a validated long-form ratings schema in which every rating has an explicit status (`observed`, `abstained`, `inapplicable`, `parse_error`, `provider_error`);
 - declared measurement semantics: level, value domain, coder definition and design label;
 - white-box output: observed and expected disagreement, coincidence matrices and per-unit contributions;
-- explicit missing-data policies, because LLM failures are rarely unrelated to the item.
+- explicit missing-data policies, because LLM failures are rarely unrelated to the item;
+- bootstrap intervals by a scheme you name: whole units or groups resampled (`scheme="units"`), or Krippendorff's KALPHA algorithm (`scheme="kalpha"`);
+- paired comparisons of two configurations on the same units, with the interval on the difference.
 
-Bootstrap intervals, paired comparisons, group-safe train/test splits that work with any scikit-learn splitter, and provenance reports are on the roadmap ([design document](docs/design/framing-v2.md)).
+Group-safe train/test splits that work with any scikit-learn splitter, and provenance reports, are on the roadmap ([design document](docs/design/framing-v2.md)).
 
 > **Reliability is not validity.** Coders can agree consistently and still be wrong in the same way, for example because of a flawed rubric or a bias they share. When results come from different designs (repeatability, inter-model agreement, human panels), they are reported as different quantities and are never pooled.
 
@@ -44,6 +46,30 @@ study = ReliabilityStudy(
 )
 result = study.alpha()
 print(result.summary())
+```
+
+## Intervals and comparisons
+
+Every interval names its scheme, because the two schemes answer different questions. `scheme` is a required argument.
+
+```python
+boot = result.bootstrap(scheme="units", n_resamples=2000, random_state=7)
+print(boot.summary())  # 95% percentile intervals for every missing-data policy
+```
+
+- `scheme="units"` resamples whole units, and whole groups when a `group` column is declared. It can also resample within declared strata (`strata=True`), and it recomputes the expected disagreement in every replicate. `method="bca"` is available as an experimental option.
+- `scheme="kalpha"` reproduces Krippendorff's KALPHA algorithm. It resamples pairs of values and holds the expected disagreement fixed.
+
+To compare two configurations of a judge, for example two prompts, select each one's rows. Both must cover the same units. Every replicate resamples the same units for both, and the interval is on the difference:
+
+```python
+diff = study.compare(
+    a={"condition_id": "prompt_v1"},
+    b={"condition_id": "prompt_v2"},
+    n_resamples=2000,
+    random_state=7,
+)
+print(diff.summary())  # alpha_b - alpha_a with a paired interval
 ```
 
 ## Licence
