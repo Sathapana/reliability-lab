@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: uv sync --all-groups --locked
+      - name: Lint
+        run: uv run ruff check
+      - name: Format
+        run: uv run ruff format --check
+      - name: Type-check
+        run: uv run mypy
+      - name: Test
+        run: uv run pytest
+
+  # irrCAC pins scipy==1.12.0, so it cannot share the lock; its parity test runs
+  # in a throwaway environment instead.
+  parity-irrcac:
+    name: irrCAC parity (isolated)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - name: Run irrCAC parity
+        run: >-
+          uv run --isolated --no-project --python 3.12
+          --with . --with irrcac --with pytest --with hypothesis
+          pytest tests/test_parity.py -m parity -k irrcac -p no:cacheprovider
