@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pytest
 from fixtures.krippendorff2011 import FOUR_CODERS_MISSING
@@ -15,12 +17,13 @@ from reliability_lab.inference import (
 F4 = FOUR_CODERS_MISSING
 
 
-def test_bca_matches_a_direct_scipy_call_and_is_flagged() -> None:
+def test_bca_matches_a_direct_scipy_call() -> None:
     result = human_study(F4["matrix"], "interval", F4["values"]).alpha()
-    with pytest.warns(BootstrapWarning, match="experimental"):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", BootstrapWarning)  # validated: no warning when it works
         boot = result.bootstrap(scheme="units", method="bca", n_resamples=999, random_state=5)
-    assert boot.experimental
-    assert "[experimental]" in boot.summary()
+    assert not boot.experimental
+    assert "[experimental]" not in boot.summary()
 
     sample = result._sample
     assert sample is not None
@@ -46,6 +49,27 @@ def test_bca_matches_a_direct_scipy_call_and_is_flagged() -> None:
     assert interval.low == pytest.approx(direct.confidence_interval.low)
     assert interval.high == pytest.approx(direct.confidence_interval.high)
     assert interval.low < interval.point < interval.high
+
+
+@pytest.mark.filterwarnings("ignore::reliability_lab.CategorySkewWarning")
+def test_undefined_bca_replicates_and_intervals_are_warned() -> None:
+    # One unit holds the only disagreement: about a third of resamples miss it and
+    # see a single category, so alpha is undefined there.
+    matrix = {"a": ["x"] * 19 + ["y"], "b": ["x"] * 20}
+    result = human_study(matrix, "nominal", ["x", "y"]).alpha()
+    with pytest.warns(BootstrapWarning) as caught:
+        boot = result.bootstrap(scheme="units", method="bca", n_resamples=500, random_state=1)
+    interval = boot["as_missing"]
+    assert interval.n_failed > 0
+    messages = [str(w.message) for w in caught]
+    assert any("undefined replicates" in m for m in messages)
+    if not interval.defined:
+        assert any("method='percentile'" in m for m in messages)
+    assert [w.category for w in boot.warnings] == ["BootstrapWarning"] * len(boot.warnings)
+    with pytest.warns(BootstrapWarning, match="undefined replicates"):
+        fallback = result.bootstrap(scheme="units", n_resamples=500, random_state=1)
+    percentile = fallback["as_missing"]
+    assert percentile.defined and percentile.n_failed > 0
 
 
 def test_weights_from_indices_counts_draws() -> None:

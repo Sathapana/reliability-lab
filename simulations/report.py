@@ -1,0 +1,432 @@
+"""Render the bootstrap coverage guidance from simulation results.
+
+    uv run --group sim python -m simulations.report
+
+Reads ``simulations/results/coverage.csv`` and ``run_info.json``, draws the
+figures (light and dark PNGs, served through ``<picture>``), and fills the
+template ``simulations/templates/bootstrap-coverage.md``. The output is
+``docs/guidance/bootstrap-coverage.md``. Edit the template, not the output.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import pandas as pd
+
+ROOT = Path(__file__).resolve().parent.parent
+RESULTS = ROOT / "simulations" / "results"
+TEMPLATE = ROOT / "simulations" / "templates" / "bootstrap-coverage.md"
+OUTPUT = ROOT / "docs" / "guidance" / "bootstrap-coverage.md"
+
+#: Chart tokens from the dataviz reference palette; categorical slots 1-3 in order.
+TOKENS: dict[str, dict[str, str]] = {
+    "light": {
+        "surface": "#fcfcfb",
+        "ink": "#0b0b0b",
+        "ink2": "#52514e",
+        "muted": "#898781",
+        "grid": "#e1e0d9",
+        "axis": "#c3c2b7",
+        "band": "#f0efec",
+        "units": "#2a78d6",
+        "kalpha": "#eb6834",
+        "bca": "#1baf7a",
+    },
+    "dark": {
+        "surface": "#1a1a19",
+        "ink": "#f0efec",
+        "ink2": "#c3c2b7",
+        "muted": "#898781",
+        "grid": "#2c2c2a",
+        "axis": "#383835",
+        "band": "#2c2c2a",
+        "units": "#3987e5",
+        "kalpha": "#d95926",
+        "bca": "#199e70",
+    },
+}
+SCHEMES = ("units", "kalpha", "bca")
+LABELS = {
+    "units": "units (percentile)",
+    "units_group": "units, group level",
+    "kalpha": "KALPHA",
+    "bca": "units (BCa)",
+}
+MARKERS = {"units": "o", "kalpha": "s", "bca": "^"}
+FACTOR_LABELS = {
+    "skewed": "Skewed prevalence (80/10/10)",
+    "coders2": "2 coders",
+    "coders5": "5 coders",
+    "accuracy60": "Accuracy 0.6",
+    "accuracy95": "Accuracy 0.95",
+    "mcar": "20% failures, at random",
+    "informative": "Failures on hard units",
+    "correlated": "Correlated errors",
+    "clustered": "Clustered units",
+}
+PX = 0.75  # points per pixel at 96 dpi
+
+
+def load(results: Path) -> tuple[pd.DataFrame, dict[str, Any]]:
+    data = pd.read_csv(results / "coverage.csv")
+    info = json.loads((results / "run_info.json").read_text(encoding="utf-8"))
+    return data, info
+
+
+# -- figures --------------------------------------------------------------------------
+
+
+def _floor(coverage: pd.Series) -> float:
+    """A coverage axis floor at a 5-point step below the lowest value (at most 60%)."""
+    return min(0.6, float(int(coverage.min() * 20) / 20) - 0.05)
+
+
+def _style(ax: plt.Axes, t: dict[str, str]) -> None:
+    ax.set_facecolor(t["surface"])
+    ax.grid(True, axis="y", color=t["grid"], linewidth=1 * PX)
+    ax.set_axisbelow(True)
+    for side in ("top", "right", "left"):
+        ax.spines[side].set_visible(False)
+    ax.spines["bottom"].set_color(t["axis"])
+    ax.tick_params(colors=t["muted"], labelcolor=t["ink2"], length=0, labelsize=8.5)
+
+
+def _legend(fig: plt.Figure, t: dict[str, str], handles: list[Any]) -> None:
+    legend = fig.legend(
+        handles=handles,
+        loc="upper center",
+        ncol=len(handles),
+        frameon=False,
+        fontsize=9,
+        bbox_to_anchor=(0.5, 0.995),
+        handlelength=1.6,
+    )
+    for text in legend.get_texts():
+        text.set_color(t["ink"])
+
+
+def _series(ax: plt.Axes, t: dict[str, str], x: list[int], y: list[float], scheme: str) -> Any:
+    (line,) = ax.plot(
+        x,
+        y,
+        color=t[scheme],
+        linewidth=2 * PX,
+        marker=MARKERS[scheme],
+        markersize=8 * PX,
+        markeredgecolor=t["surface"],
+        markeredgewidth=2 * PX,
+        solid_capstyle="round",
+        solid_joinstyle="round",
+        label=LABELS[scheme],
+    )
+    return line
+
+
+def figure_coverage_by_n(data: pd.DataFrame, mode: str, path: Path) -> None:
+    """Coverage (top) and mean width (bottom) against n, for nominal and ordinal data."""
+    t = TOKENS[mode]
+    fig, axes = plt.subplots(2, 2, figsize=(8.4, 5.6), sharex=True, dpi=200)
+    fig.patch.set_facecolor(t["surface"])
+    handles = []
+    for col, name in enumerate(("baseline", "ordinal")):
+        cells = data[data["scenario_name"] == name]
+        sizes = sorted(cells["scenario_n_units"].unique())
+        positions = list(range(len(sizes)))
+        for row, metric in enumerate(("coverage", "mean_width")):
+            ax = axes[row][col]
+            _style(ax, t)
+            if metric == "coverage":
+                # The reference line stops at the data; its label sits in the free
+                # space to the right, clear of every series.
+                ax.plot(
+                    [-0.3, positions[-1] + 0.15],
+                    [0.95, 0.95],
+                    color=t["ink2"],
+                    linewidth=1 * PX,
+                    zorder=1,
+                )
+                ax.text(
+                    positions[-1] + 0.25,
+                    0.95,
+                    "95%",
+                    color=t["ink2"],
+                    fontsize=8,
+                    ha="left",
+                    va="center",
+                )
+                ax.set_ylim(_floor(data["coverage"]), 1.0)
+                ax.yaxis.set_major_formatter(lambda v, _: f"{v:.0%}")
+            for scheme in SCHEMES:
+                rows = cells[cells["scheme"] == scheme].set_index("scenario_n_units")
+                line = _series(ax, t, positions, [rows.loc[n, metric] for n in sizes], scheme)
+                if row == 0 and col == 0:
+                    handles.append(line)
+            ax.set_xticks(positions, [f"n = {n}" for n in sizes])
+            ax.set_xlim(-0.3, positions[-1] + 0.7)
+            title = "Nominal, 3 categories" if name == "baseline" else "Ordinal, 5-point scale"
+            if row == 0:
+                ax.set_title(title, color=t["ink"], fontsize=10, loc="left")
+            if col == 0:
+                ylabel = "Coverage of 95% interval" if metric == "coverage" else "Mean width"
+                ax.set_ylabel(ylabel, color=t["ink2"], fontsize=9)
+    _legend(fig, t, handles)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.savefig(path, facecolor=t["surface"])
+    plt.close(fig)
+
+
+def figure_coverage_by_factor(data: pd.DataFrame, mode: str, path: Path) -> None:
+    """Coverage per scheme for each one-factor variation (dot plot)."""
+    t = TOKENS[mode]
+    cells = data[data["scenario_name"].isin(FACTOR_LABELS)]
+    order = [
+        (name, n)
+        for name in FACTOR_LABELS
+        for n in sorted(cells[cells["scenario_name"] == name]["scenario_n_units"].unique())
+    ]
+    fig, ax = plt.subplots(figsize=(8.4, 0.34 * len(order) + 1.2), dpi=200)
+    fig.patch.set_facecolor(t["surface"])
+    ax.set_facecolor(t["surface"])
+    ax.axvspan(0.94, 0.96, color=t["band"], zorder=0)
+    ax.axvline(0.95, color=t["ink2"], linewidth=1 * PX, zorder=1)
+    handles = []
+    for scheme in SCHEMES:
+        xs, ys = [], []
+        for y, (name, n) in enumerate(order):
+            row = cells[
+                (cells["scenario_name"] == name)
+                & (cells["scenario_n_units"] == n)
+                & (cells["scheme"] == scheme)
+            ]
+            xs.append(float(row["coverage"].iloc[0]))
+            ys.append(y)
+        handles.append(
+            ax.scatter(
+                xs,
+                ys,
+                s=(8 * PX) ** 2 * 1.6,
+                marker=MARKERS[scheme],
+                color=t[scheme],
+                edgecolors=t["surface"],
+                linewidths=2 * PX,
+                zorder=3,
+                label=LABELS[scheme],
+            )
+        )
+    ax.set_yticks(range(len(order)), [f"{FACTOR_LABELS[name]}, n = {n}" for name, n in order])
+    ax.invert_yaxis()
+    ax.set_xlim(_floor(cells["coverage"]), 1.0)
+    ax.xaxis.set_major_formatter(lambda v, _: f"{v:.0%}")
+    ax.grid(True, axis="x", color=t["grid"], linewidth=1 * PX)
+    ax.set_axisbelow(True)
+    for side in ("top", "right", "left", "bottom"):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(colors=t["muted"], labelcolor=t["ink2"], length=0, labelsize=8.5)
+    ax.set_xlabel(
+        "Coverage of the 95% interval (shaded: within ±1 point of nominal)",
+        color=t["ink2"],
+        fontsize=9,
+    )
+    _legend(fig, t, handles)
+    fig.tight_layout(rect=(0, 0, 1, 1 - 0.5 / (0.34 * len(order) + 1.2)))
+    fig.savefig(path, facecolor=t["surface"])
+    plt.close(fig)
+
+
+FIGURES = {
+    "coverage_by_n": (
+        figure_coverage_by_n,
+        "Coverage and mean width against sample size for the three schemes",
+    ),
+    "coverage_by_factor": (
+        figure_coverage_by_factor,
+        "Coverage of each scheme under each one-factor variation",
+    ),
+}
+
+
+def picture(name: str, alt: str) -> str:
+    return (
+        "<picture>\n"
+        f'  <source media="(prefers-color-scheme: dark)" srcset="figures/{name}-dark.png">\n'
+        f'  <img alt="{alt}" src="figures/{name}-light.png" width="840">\n'
+        "</picture>"
+    )
+
+
+# -- tables ---------------------------------------------------------------------------
+
+
+#: Shown for values that are undefined or not applicable (an en dash).
+MISSING = chr(0x2013)
+TIMES = chr(0x00D7)
+
+
+def _pct(x: float) -> str:
+    return MISSING if pd.isna(x) else f"{x:.1%}"
+
+
+def _num(x: float, digits: int = 3) -> str:
+    return MISSING if pd.isna(x) else f"{x:.{digits}f}"
+
+
+def _markdown(frame: pd.DataFrame) -> str:
+    header = "| " + " | ".join(frame.columns) + " |"
+    rule = "| " + " | ".join("---" for _ in frame.columns) + " |"
+    rows = ["| " + " | ".join(str(v) for v in row) + " |" for row in frame.to_numpy()]
+    return "\n".join([header, rule, *rows])
+
+
+def _cell(data: pd.DataFrame, name: str, n: int, scheme: str) -> pd.Series:
+    rows = data[
+        (data["scenario_name"] == name)
+        & (data["scenario_n_units"] == n)
+        & (data["scheme"] == scheme)
+    ]
+    return rows.iloc[0]
+
+
+def _scenario_label(name: str, n: int) -> str:
+    base = {"baseline": "Nominal (baseline)", "ordinal": "Ordinal 5-point"}
+    return f"{base.get(name) or FACTOR_LABELS[name]}, n = {n}"
+
+
+def table_sample_size(data: pd.DataFrame) -> str:
+    rows = []
+    for name in ("baseline", "ordinal"):
+        for n in sorted(data[data["scenario_name"] == name]["scenario_n_units"].unique()):
+            cells = {s: _cell(data, name, n, s) for s in SCHEMES}
+            rows.append(
+                {
+                    "Scenario": _scenario_label(name, n),
+                    "True alpha": _num(cells["units"]["true_alpha"]),
+                    **{f"{LABELS[s]} coverage": _pct(cells[s]["coverage"]) for s in SCHEMES},
+                    **{f"{LABELS[s]} width": _num(cells[s]["mean_width"], 2) for s in SCHEMES},
+                }
+            )
+    return _markdown(pd.DataFrame(rows))
+
+
+def table_factors(data: pd.DataFrame) -> str:
+    rows = []
+    for name in FACTOR_LABELS:
+        for n in sorted(data[data["scenario_name"] == name]["scenario_n_units"].unique()):
+            cells = {s: _cell(data, name, n, s) for s in SCHEMES}
+            rows.append(
+                {
+                    "Scenario": _scenario_label(name, n),
+                    "True alpha": _num(cells["units"]["true_alpha"]),
+                    **{LABELS[s]: _pct(cells[s]["coverage"]) for s in SCHEMES},
+                    "BCa undefined": _pct(cells["bca"]["undefined_rate"]),
+                    "Units below / above": f"{_pct(cells['units']['miss_below'])} / "
+                    f"{_pct(cells['units']['miss_above'])}",
+                }
+            )
+    return _markdown(pd.DataFrame(rows))
+
+
+def table_clusters(data: pd.DataFrame) -> str:
+    rows = []
+    for n in sorted(data[data["scenario_name"] == "clustered"]["scenario_n_units"].unique()):
+        for scheme in ("units", "units_group", "kalpha", "bca"):
+            cell = _cell(data, "clustered", n, scheme)
+            rows.append(
+                {
+                    "Units (clusters)": f"{n} ({n // 5})",
+                    "Scheme": LABELS[scheme] + (" (group level)" if scheme == "bca" else ""),
+                    "Coverage": _pct(cell["coverage"]),
+                    "Mean width": _num(cell["mean_width"], 3),
+                }
+            )
+    return _markdown(pd.DataFrame(rows))
+
+
+def table_failures(data: pd.DataFrame) -> str:
+    rows = []
+    for name in ("mcar", "informative"):
+        for n in sorted(data[data["scenario_name"] == name]["scenario_n_units"].unique()):
+            cell = _cell(data, name, n, "units")
+            rows.append(
+                {
+                    "Scenario": _scenario_label(name, n),
+                    "Complete-data alpha": _num(cell["complete_alpha"]),
+                    "Alpha with failures dropped": _num(cell["true_alpha"]),
+                    "Gap": f"{cell['true_alpha'] - cell['complete_alpha']:+.3f}",
+                    "Units coverage of the dropped-failures value": _pct(cell["coverage"]),
+                    "Policy range covers complete-data alpha": _pct(
+                        cell["sensitivity_covers_complete"]
+                    ),
+                }
+            )
+    return _markdown(pd.DataFrame(rows))
+
+
+def run_info_text(info: dict[str, Any], data: pd.DataFrame) -> str:
+    mc_error = data.drop_duplicates("cell")["true_alpha_mc_error"].max()
+    v = info["versions"]
+    return (
+        f"{info['scenarios']} scenarios {TIMES} {info['n_sim']:,} replications {TIMES} "
+        f"{info['n_resamples']:,} bootstrap resamples, seed {info['seed']}, "
+        f"reliability-lab {v['reliability_lab']} (numpy {v['numpy']}, scipy {v['scipy']}, "
+        f"pandas {v['pandas']}); {info['wall_seconds'] / 60:.0f} minutes on "
+        f"{info['workers']} workers. The largest Monte Carlo error of a true alpha is "
+        f"{mc_error:.4f}, and a coverage near 95% has a Monte Carlo standard error of "
+        f"about {(0.95 * 0.05 / info['n_sim']) ** 0.5:.1%}."
+    )
+
+
+TABLES = {
+    "sample_size": table_sample_size,
+    "factors": table_factors,
+    "clusters": table_clusters,
+    "failures": table_failures,
+}
+
+
+def render(results: Path = RESULTS, template: Path = TEMPLATE, output: Path = OUTPUT) -> Path:
+    data, info = load(results)
+    figures = output.parent / "figures"
+    figures.mkdir(parents=True, exist_ok=True)
+    for name, (draw, _) in FIGURES.items():
+        for mode in ("light", "dark"):
+            draw(data, mode, figures / f"{name}-{mode}.png")
+
+    def fill(match: re.Match[str]) -> str:
+        kind, _, name = match.group(1).partition(":")
+        if kind == "table":
+            return TABLES[name](data)
+        if kind == "figure":
+            return picture(name, FIGURES[name][1])
+        if kind == "run_info":
+            return run_info_text(info, data)
+        raise KeyError(match.group(0))
+
+    text = template.read_text(encoding="utf-8")
+    body = re.sub(r"\{\{([a-z_]+(?::[a-z_]+)?)\}\}", fill, text)
+    notice = (
+        "<!-- Generated by simulations/report.py from simulations/results; "
+        "edit simulations/templates/bootstrap-coverage.md instead. -->\n\n"
+    )
+    output.write_text(notice + body, encoding="utf-8")
+    return output
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--results", type=Path, default=RESULTS)
+    parser.add_argument("--output", type=Path, default=OUTPUT)
+    args = parser.parse_args()
+    print(f"wrote {render(args.results, TEMPLATE, args.output)}")
+
+
+if __name__ == "__main__":
+    main()

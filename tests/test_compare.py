@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 from reference import reference_alpha
 
-from reliability_lab import BootstrapWarning, DesignError, RatingFrame, ReliabilityStudy
+from reliability_lab import DesignError, RatingFrame, ReliabilityStudy
 
 pytestmark = pytest.mark.filterwarnings("ignore::reliability_lab.CategorySkewWarning")
 
@@ -128,9 +128,10 @@ def test_kalpha_has_no_paired_form() -> None:
         study_of(panel_matrix()).compare(A, B, scheme="kalpha")
 
 
-def test_bca_comparison_is_experimental() -> None:
-    with pytest.warns(BootstrapWarning, match="experimental"):
-        diff = study_of(panel_matrix()).compare(A, B, method="bca", n_resamples=500, random_state=2)
-    assert diff.arm_a.experimental
+def test_bca_comparison() -> None:
+    diff = study_of(panel_matrix()).compare(A, B, method="bca", n_resamples=500, random_state=2)
+    assert diff.arm_a.method == "bca"
+    assert not diff.arm_a.experimental
+    assert not [w for w in diff.warnings if w.category == "BootstrapWarning"]
     d = diff["as_missing"]
     assert d.low <= d.point <= d.high

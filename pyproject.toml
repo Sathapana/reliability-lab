@@ -66,6 +66,10 @@ parity = [
     "nltk>=3.8",
     "evalica>=0.3",
 ]
+# Figures for the coverage-simulation guidance (simulations/report.py).
+sim = [
+    "matplotlib>=3.8",
+]
 
 [tool.uv]
 default-groups = ["dev", "parity"]
@@ -101,6 +105,8 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The repo root, so tests can import the simulations harness.
+pythonpath = ["."]
 addopts = ["-ra", "--strict-markers"]
 markers = [
     "parity: compares against third-party reference implementations (test-only dependencies)",

@@ -61,8 +61,10 @@ boot = result.bootstrap(scheme="units", n_resamples=2000, random_state=7)
 print(boot.summary())  # 95% percentile intervals for every missing-data policy
 ```
 
-- `scheme="units"` resamples whole units, and whole groups when a `group` column is declared. It can also resample within declared strata (`strata=True`), and it recomputes the expected disagreement in every replicate. `method="bca"` is available as an experimental option.
+- `scheme="units"` resamples whole units, and whole groups when a `group` column is declared. It can also resample within declared strata (`strata=True`), and it recomputes the expected disagreement in every replicate. `method="bca"` gave the most accurate coverage in the simulations; on small samples dominated by one category it can fail, and that is warned about.
 - `scheme="kalpha"` reproduces Krippendorff's KALPHA algorithm. It resamples pairs of values and holds the expected disagreement fixed.
+
+Which scheme to trust, and when, is measured by simulation in the [bootstrap coverage guidance](docs/guidance/bootstrap-coverage.md).
 
 To compare two configurations of a judge, for example two prompts, select each one's rows. Both must cover the same units. Every replicate resamples the same units for both, and the interval is on the difference:
 

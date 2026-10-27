@@ -17,6 +17,7 @@ configurations, so the interval falls on the difference alpha_b - alpha_a.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -366,7 +367,10 @@ def bca_interval(
     def vectorised(idx: IntArray, axis: int = -1) -> FloatArray:
         return statistic(np.moveaxis(np.asarray(idx, dtype=np.intp), axis, -1))
 
-    with np.errstate(divide="ignore", invalid="ignore"):
+    # scipy's own warning about a degenerate BCa is replaced by this library's
+    # BootstrapWarning, which names the estimate and the fallback.
+    with np.errstate(divide="ignore", invalid="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", stats.DegenerateDataWarning)
         res = stats.bootstrap(
             (np.arange(n_clusters),),
             vectorised,
@@ -512,9 +516,7 @@ def bootstrap(
         if len(names) > 1:
             notes.append("All estimates use the same resamples, so their intervals are paired.")
 
-    if method == "bca":
-        recorded.append(_bca_warning())
-    recorded.extend(_failure_warnings(intervals, n_resamples))
+    recorded.extend(_interval_warnings(intervals, n_resamples))
     return BootstrapResult(
         scheme=scheme,
         level=level_used,
@@ -524,7 +526,7 @@ def bootstrap(
         n_resamples=n_resamples,
         seed=seed,
         alpha_min=alpha_min,
-        experimental=method == "bca",
+        experimental=False,
         n_clusters=n_clusters,
         design=result.design,
         measurement=result.measurement,
@@ -608,9 +610,7 @@ def compare(
         arm_intervals["b"][name] = bca_interval(name, point_b, stat_b, *args)
         differences[name] = bca_interval(name, point_b - point_a, stat_diff, *args)
 
-    if method == "bca":
-        recorded.append(_bca_warning())
-    recorded.extend(_failure_warnings(differences, n_resamples))
+    recorded.extend(_interval_warnings(differences, n_resamples))
     within = " within strata" if strata else ""
     notes = (
         "Both configurations are evaluated on the same resampled "
@@ -629,7 +629,7 @@ def compare(
             n_resamples=n_resamples,
             seed=seed,
             alpha_min=None,
-            experimental=method == "bca",
+            experimental=False,
             n_clusters=plan_a.n_clusters,
             design=res.design,
             measurement=res.measurement,
@@ -701,24 +701,34 @@ def _seed(random_state: int | np.random.Generator | None) -> int:
     return int(random_state)
 
 
-def _bca_warning() -> RecordedWarning:
-    return emit(
-        BootstrapWarning,
-        "BCa intervals are experimental until coverage simulations validate them for alpha",
-        stacklevel=4,
-    )
-
-
-def _failure_warnings(intervals: Mapping[str, Interval], n_resamples: int) -> list[RecordedWarning]:
+def _interval_warnings(
+    intervals: Mapping[str, Interval], n_resamples: int
+) -> list[RecordedWarning]:
+    """Warn about undefined replicates (counted, left out) and about missing intervals."""
+    found = []
     failed = {name: i.n_failed for name, i in intervals.items() if i.n_failed}
-    if not failed:
-        return []
-    counts = ", ".join(f"{name} {count}" for name, count in failed.items())
-    return [
-        emit(
-            BootstrapWarning,
-            f"undefined replicates were counted and left out of the intervals ({counts}, of "
-            f"{n_resamples} each)",
-            stacklevel=4,
+    if failed:
+        counts = ", ".join(f"{name} {count}" for name, count in failed.items())
+        found.append(
+            emit(
+                BootstrapWarning,
+                f"undefined replicates were counted and left out of the intervals ({counts}, "
+                f"of {n_resamples} each)",
+                stacklevel=4,
+            )
         )
-    ]
+    for name, interval in intervals.items():
+        if interval.undefined_reason:
+            advice = (
+                "; method='percentile' gives an interval from the defined replicates"
+                if "BCa" in interval.undefined_reason
+                else ""
+            )
+            found.append(
+                emit(
+                    BootstrapWarning,
+                    f"no interval for {name}: {interval.undefined_reason}{advice}",
+                    stacklevel=4,
+                )
+            )
+    return found

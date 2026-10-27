@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Bootstrap coverage simulations (`simulations/`):
+  - a seeded latent-class data process with difficulty, correlated errors, random or informative failures, and clustered units;
+  - true alphas computed from 200,000 units;
+  - coverage, width and failure rates of every scheme across 26 scenarios.
+- Guidance from those simulations: [docs/guidance/bootstrap-coverage.md](docs/guidance/bootstrap-coverage.md).
+- BCa intervals are no longer flagged experimental. They covered 93.8–97.0% in 25 of 26 scenarios (92.9% with 20 clusters). `BootstrapResult.experimental` stays in the result format and is now always false.
+- A `BootstrapWarning` now names each estimate left without an interval and, for BCa, points to `method="percentile"`. Undefined replicates are still counted and warned about.
+
 ## 0.1.0
 
 LLM judge workflows.
