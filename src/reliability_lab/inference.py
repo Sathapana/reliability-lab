@@ -531,6 +531,7 @@ def bootstrap(
         intervals=intervals,
         warnings=tuple(recorded),
         notes=tuple(notes),
+        provenance=result.provenance,
     )
 
 
@@ -635,6 +636,7 @@ def compare(
             intervals=ints,
             warnings=(),
             notes=(),
+            provenance=res.provenance,
         )
 
     return ComparisonResult(

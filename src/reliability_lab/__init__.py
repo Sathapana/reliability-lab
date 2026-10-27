@@ -10,6 +10,7 @@ from reliability_lab.exceptions import (
     CoderDependenceWarning,
     DesignError,
     DomainSizeWarning,
+    LeakageError,
     ReliabilityLabError,
     ReliabilityWarning,
     SchemaError,
@@ -22,8 +23,10 @@ from reliability_lab.report import (
     ComparisonResult,
     Coverage,
     Interval,
+    Provenance,
 )
-from reliability_lab.study import ReliabilityStudy
+from reliability_lab.split import SplitManifest
+from reliability_lab.study import Fold, ReliabilityStudy
 
 __all__ = [
     "INTERVAL",
@@ -43,12 +46,16 @@ __all__ = [
     "DesignError",
     "Distance",
     "DomainSizeWarning",
+    "Fold",
     "Interval",
+    "LeakageError",
+    "Provenance",
     "RatingFrame",
     "ReliabilityLabError",
     "ReliabilityStudy",
     "ReliabilityWarning",
     "SchemaError",
+    "SplitManifest",
     "Status",
     "UndefinedAlphaError",
     "__version__",

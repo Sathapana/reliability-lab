@@ -1134,9 +1134,11 @@ dev = [
     { name = "hypothesis" },
     { name = "mypy" },
     { name = "pandas-stubs" },
+    { name = "pyarrow" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
+    { name = "scikit-learn" },
 ]
 parity = [
     { name = "evalica" },
@@ -1159,9 +1161,11 @@ dev = [
     { name = "hypothesis", specifier = ">=6.100" },
     { name = "mypy", specifier = ">=1.11" },
     { name = "pandas-stubs", specifier = ">=2.1" },
+    { name = "pyarrow", specifier = ">=15" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-cov", specifier = ">=5" },
     { name = "ruff", specifier = ">=0.6" },
+    { name = "scikit-learn", specifier = ">=1.4" },
 ]
 parity = [
     { name = "evalica", specifier = ">=0.3" },

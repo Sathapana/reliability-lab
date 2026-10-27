@@ -9,14 +9,21 @@ study, and those inherit its declarations.
 from __future__ import annotations
 
 import math
+import os
+import platform
+import warnings
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+import scipy
 from scipy import sparse
 
+from reliability_lab._version import __version__
 from reliability_lab.alpha import (
     BUILTIN_DISTANCES,
     NOMINAL,
@@ -32,6 +39,7 @@ from reliability_lab.exceptions import (
     CategorySkewWarning,
     DesignError,
     DomainSizeWarning,
+    ReliabilityWarning,
     UndefinedAlphaError,
 )
 from reliability_lab.inference import EstimateInput, StudySample
@@ -43,9 +51,11 @@ from reliability_lab.report import (
     Coverage,
     Level,
     Method,
+    Provenance,
     RecordedWarning,
     emit,
 )
+from reliability_lab.split import TEST, SplitManifest, UnitLayout, assign_units, make_manifests
 
 MissingPolicy = Literal["as_missing", "as_category", "sensitivity"]
 
@@ -66,6 +76,16 @@ SELECTOR_FIELDS: tuple[str, ...] = (
 )
 
 IntArray = npt.NDArray[np.intp]
+
+
+@dataclass(frozen=True, eq=False)
+class Fold:
+    """One fold of a cross-validation: dev and test studies and their manifest."""
+
+    index: int
+    dev: ReliabilityStudy
+    test: ReliabilityStudy
+    manifest: SplitManifest
 
 
 class ReliabilityStudy:
@@ -115,6 +135,9 @@ class ReliabilityStudy:
             raise TypeError(f"ratings must be a RatingFrame, got {type(ratings).__name__}")
         self._ratings = ratings
         self._warnings: list[RecordedWarning] = []
+        #: The manifest and partition this study was split into, if any.
+        self._split: tuple[SplitManifest, str] | None = None
+        self._split_notes: tuple[str, ...] = ()
 
         self._distance = _resolve_distance(measurement)
         self._values = _resolve_domain(values, self._distance)
@@ -198,14 +221,76 @@ class ReliabilityStudy:
         """Warnings raised while checking the declarations."""
         return tuple(self._warnings)
 
+    @property
+    def manifest(self) -> SplitManifest | None:
+        """The split this study is a partition of, or None."""
+        return self._split[0] if self._split else None
+
+    @property
+    def partition(self) -> str | None:
+        """``"dev"`` or ``"test"`` when this study is a partition of a split."""
+        return self._split[1] if self._split else None
+
     def __repr__(self) -> str:
+        part = f", partition={self.partition!r}" if self._split else ""
         return (
             f"ReliabilityStudy(design={self._design.value!r}, "
             f"measurement={self._distance.name!r}, values={list(self._values)!r}, "
             f"coders={list(self._coders.by)!r}, units={len(self._unit_labels)}, "
             f"coders_found={len(self._coder_names)}, "
-            f"missing_policies={list(self._policies)!r})"
+            f"missing_policies={list(self._policies)!r}{part})"
         )
+
+    # -- splits -------------------------------------------------------------------
+
+    def holdout(
+        self, splitter: Any, *, fold: int = 0, group_stratum: Any = None
+    ) -> tuple[ReliabilityStudy, ReliabilityStudy]:
+        """Split into dev and test studies with any scikit-learn style splitter.
+
+        The splitter sees one sample per group when ``group_id`` is declared
+        (otherwise one per unit), so groups, units and repeated LLM calls never
+        cross partitions. Declared strata are passed as ``y``. When a group's
+        units span several strata, ``group_stratum`` must say how to label the
+        group: ``"majority"`` or a mapping from group to stratum. ``fold`` picks
+        which of the splitter's folds becomes test; ``StratifiedGroupKFold(4)``
+        fold 0 is an approximate 25% stratified group holdout, and the realised
+        size is recorded in the manifest.
+
+        Split before tuning the judge, freeze it, then estimate alpha on test.
+        Both studies inherit every declaration and carry the manifest, which
+        ``save_manifest`` persists.
+        """
+        (manifest,) = make_manifests(self._layout(), splitter, group_stratum, folds=[fold])
+        return self._partitions(manifest)
+
+    def cv(self, splitter: Any, *, group_stratum: Any = None) -> list[Fold]:
+        """Every fold of ``splitter`` as dev and test studies (see :meth:`holdout`).
+
+        For exploratory work on small data; keep an untouched final test set for
+        deployment claims.
+        """
+        manifests = make_manifests(self._layout(), splitter, group_stratum)
+        return [Fold(m.fold, *self._partitions(m), m) for m in manifests]
+
+    def apply_manifest(
+        self, manifest: SplitManifest | str | os.PathLike[str]
+    ) -> tuple[ReliabilityStudy, ReliabilityStudy]:
+        """Reapply a saved split, by its ids, to these ratings.
+
+        Use it for a later log, such as new judge runs on the same units. Every unit
+        must be in the manifest and, at group level, in the same group as before.
+        """
+        if not isinstance(manifest, SplitManifest):
+            manifest = SplitManifest.load(manifest)
+        part_of_unit, notes = assign_units(self._layout(), manifest)
+        return self._partitions(manifest, part_of_unit, tuple(notes))
+
+    def save_manifest(self, path: str | os.PathLike[str]) -> None:
+        """Write the manifest of the split this study is a partition of."""
+        if self._split is None:
+            raise DesignError("this study is not a partition of a split; use holdout() first")
+        self._split[0].save(path)
 
     # -- estimation ---------------------------------------------------------------
 
@@ -263,6 +348,13 @@ class ReliabilityStudy:
         notes = list(self._notes)
         if not self._is_error.any() and len(self._policies) > 1:
             notes.append("There are no failed attempts, so every missing-data policy coincides.")
+        if self._split is not None:
+            manifest, partition = self._split
+            notes.append(
+                f"These are the {partition} units of a {manifest.level}-level split "
+                f"(fold {manifest.fold} of {manifest.n_folds}, {manifest.splitter_class})."
+            )
+            notes.extend(self._split_notes)
 
         return AlphaResult(
             design=self._design.value,
@@ -276,6 +368,7 @@ class ReliabilityStudy:
             coverage=self._coverage(),
             warnings=tuple(recorded),
             notes=tuple(notes),
+            provenance=self._provenance(),
             _sample=StudySample(
                 unit_labels=self._unit_labels,
                 unit_groups=self._unit_groups,
@@ -320,7 +413,8 @@ class ReliabilityStudy:
                 f"{len(overlap)} rows are selected by both a and b {preview(overlap)}; the "
                 "configurations must be disjoint"
             )
-        arm_a, arm_b = self._derive(mask_a), self._derive(mask_b)
+        arm_a = self._derive(mask_a, self._split, self._split_notes)
+        arm_b = self._derive(mask_b, self._split, self._split_notes)
         units_a, units_b = set(arm_a._unit_labels), set(arm_b._unit_labels)
         if units_a != units_b:
             only_a, only_b = sorted(units_a - units_b, key=str), sorted(units_b - units_a, key=str)
@@ -365,17 +459,116 @@ class ReliabilityStudy:
             raise DesignError(f"{name}={dict(selector)} selects no rows")
         return mask
 
-    def _derive(self, mask: npt.NDArray[np.bool_]) -> ReliabilityStudy:
-        """A study on a subset of rows that inherits every declaration of this one."""
-        return ReliabilityStudy(
-            self._ratings._subset(mask),
-            measurement=self._distance,
-            values=self._values,
-            coders=self._coders,
-            design=self._design,
-            missing_policies=self._policies,  # type: ignore[arg-type]
-            abstain_as=self._abstain_as,
-            inapplicable_as=self._inapplicable_as,
+    def _derive(
+        self,
+        mask: npt.NDArray[np.bool_],
+        split: tuple[SplitManifest, str] | None = None,
+        split_notes: tuple[str, ...] = (),
+    ) -> ReliabilityStudy:
+        """A study on a subset of rows that inherits every declaration of this one.
+
+        Its design warnings are recorded but not raised again: this study already
+        raised them, and ten folds should not repeat each one ten times.
+        """
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ReliabilityWarning)
+            derived = ReliabilityStudy(
+                self._ratings._subset(mask),
+                measurement=self._distance,
+                values=self._values,
+                coders=self._coders,
+                design=self._design,
+                missing_policies=self._policies,  # type: ignore[arg-type]
+                abstain_as=self._abstain_as,
+                inapplicable_as=self._inapplicable_as,
+            )
+        derived._split = split
+        derived._split_notes = split_notes
+        return derived
+
+    def _layout(self) -> UnitLayout:
+        return UnitLayout(
+            labels=self._unit_labels,
+            groups=self._unit_groups,
+            strata=self._unit_strata,
+            ratings_fingerprint=self._ratings.fingerprint(),
+        )
+
+    def _partitions(
+        self,
+        manifest: SplitManifest,
+        part_of_unit: npt.NDArray[np.object_] | None = None,
+        notes: tuple[str, ...] = (),
+    ) -> tuple[ReliabilityStudy, ReliabilityStudy]:
+        """The dev and test studies of a manifest (rows of units outside both are dropped)."""
+        if part_of_unit is None:
+            where = manifest.partition_of()
+            part_of_unit = np.array([where[_plain(u)] for u in self._unit_labels], dtype=object)
+        part_of_row = part_of_unit[self._unit_codes]
+        studies = []
+        for name in ("dev", TEST):
+            mask = part_of_row == name
+            if not mask.any():
+                raise DesignError(f"the split leaves the {name} partition empty")
+            studies.append(self._derive(mask, (manifest, name), notes))
+        return studies[0], studies[1]
+
+    def _provenance(self) -> Provenance:
+        ratings = self._ratings
+        gaps = []
+        if ratings.implicit_status:
+            gaps.append(
+                "No status column: every row was taken as observed, so failed attempts "
+                "cannot be told apart from ratings."
+            )
+        if "group_id" not in ratings.declared:
+            gaps.append("No group_id: units are treated as independent in resampling and splits.")
+        if ratings.is_llm.any():
+            family = ratings._data["model_family"]
+            if "model_family" not in ratings.declared or family.isna().any():
+                gaps.append(
+                    "model_family is missing for some LLM rows, so coder independence "
+                    "cannot be fully checked."
+                )
+            gaps.append(
+                "No trace sidecar: provider, prompt hash, temperature and parser version "
+                "are not recorded (the sidecar arrives with the LLM workflows)."
+            )
+        split = None
+        if self._split is not None:
+            manifest, partition = self._split
+            split = {
+                "partition": partition,
+                "level": manifest.level,
+                "fold": manifest.fold,
+                "n_folds": manifest.n_folds,
+                "splitter": manifest.splitter,
+                "units_fingerprint": manifest.units_fingerprint,
+                "manifest_created_at": manifest.created_at,
+            }
+        return Provenance(
+            versions={
+                "reliability_lab": __version__,
+                "python": platform.python_version(),
+                "numpy": np.__version__,
+                "scipy": scipy.__version__,
+                "pandas": pd.__version__,
+            },
+            platform=platform.platform(),
+            created_at=datetime.now(UTC).isoformat(timespec="seconds"),
+            ratings_fingerprint=ratings.fingerprint(),
+            n_rows=len(ratings),
+            declarations={
+                "measurement": self._distance.name,
+                "values": list(self._values),
+                "coders": list(self._coders.by),
+                "design": self._design.value,
+                "missing_policies": list(self._policies),
+                "abstain_as": self._abstain_as,
+                "inapplicable_as": self._inapplicable_as,
+            },
+            split=split,
+            gaps=tuple(gaps),
         )
 
     def _code_values(self, data: pd.DataFrame) -> IntArray:

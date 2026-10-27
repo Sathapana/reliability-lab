@@ -13,6 +13,10 @@ class DesignError(ReliabilityLabError, ValueError):
     """The declared study design is incomplete, inconsistent with the data, or unsupported."""
 
 
+class LeakageError(DesignError):
+    """Data meant for tuning or few-shot examples reaches the test partition."""
+
+
 class UndefinedAlphaError(ReliabilityLabError, ValueError):
     """Alpha is undefined: no pairable values, or zero expected disagreement."""
 

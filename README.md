@@ -1,6 +1,6 @@
 # reliability-lab
 
-**Status: pre-alpha.** The API is not stable and nothing is published to PyPI yet.
+**Status: alpha (0.1.0a1).** The API may still change between releases.
 
 reliability-lab is a study-design library for measuring the reliability of LLM and human judgments. It is built on Krippendorff's alpha. Alpha implementations already exist in Python. This package adds the workflow around the coefficient:
 
@@ -9,18 +9,21 @@ reliability-lab is a study-design library for measuring the reliability of LLM a
 - white-box output: observed and expected disagreement, coincidence matrices and per-unit contributions;
 - explicit missing-data policies, because LLM failures are rarely unrelated to the item;
 - bootstrap intervals by a scheme you name: whole units or groups resampled (`scheme="units"`), or Krippendorff's KALPHA algorithm (`scheme="kalpha"`);
-- paired comparisons of two configurations on the same units, with the interval on the difference.
+- paired comparisons of two configurations on the same units, with the interval on the difference;
+- group-safe train/test splits that work with any scikit-learn splitter, with a saved manifest that reproduces the split;
+- versioned JSON and Parquet reports with provenance.
 
-Group-safe train/test splits that work with any scikit-learn splitter, and provenance reports, are on the roadmap ([design document](docs/design/framing-v2.md)).
+LLM-specific workflows (a trace sidecar, repeatability and order-swap checks) are next on the roadmap ([design document](docs/design/framing-v2.md)).
 
 > **Reliability is not validity.** Coders can agree consistently and still be wrong in the same way, for example because of a flawed rubric or a bias they share. When results come from different designs (repeatability, inter-model agreement, human panels), they are reported as different quantities and are never pooled.
 
-## Install (development)
+## Install
 
 ```bash
-uv sync
-uv run pytest
+pip install --pre "reliability-lab[sklearn,parquet]"
 ```
+
+The extras are optional. `sklearn` provides the splitters, although any object with a scikit-learn style `split` method works; `parquet` enables `to_parquet`. For development, run `uv sync` and then `uv run pytest`.
 
 ## Example
 
@@ -71,6 +74,33 @@ diff = study.compare(
 )
 print(diff.summary())  # alpha_b - alpha_a with a paired interval
 ```
+
+## Splits and reports
+
+Teams tune the judge (prompt, few-shot examples, rubric) and should report reliability on units the tuning never saw. So split before tuning, freeze the judge, then estimate on the test partition.
+
+When groups are declared, the splitter sees one sample per group (a conversation, say), so groups and repeated LLM calls never cross partitions:
+
+```python
+from sklearn.model_selection import StratifiedGroupKFold
+
+dev, test = study.holdout(
+    StratifiedGroupKFold(n_splits=4, shuffle=True, random_state=7),
+    group_stratum="majority",  # needed only when a group's units span several strata
+)
+test.save_manifest("split.json")  # the ids of every partition, not just the seed
+
+# ... tune and freeze the judge on dev ...
+
+result = test.alpha()
+result.to_json("alpha_test.json")  # strict JSON with provenance
+result.to_parquet("alpha_test/")  # tidy tables
+
+dev2, test2 = later_study.apply_manifest("split.json")  # same units, new judge runs
+test.manifest.assert_no_leakage(few_shot_units)  # raises LeakageError
+```
+
+See [`examples/splits.py`](examples/splits.py) for a full run. Releases are described in [docs/releasing.md](docs/releasing.md).
 
 ## Licence
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Hashable, Iterable
 from enum import StrEnum
 from typing import Any
@@ -54,6 +55,27 @@ def _plain(x: Any) -> Any:
     return x.item() if isinstance(x, np.generic) else x
 
 
+def canonical_text(x: Any) -> str:
+    """Stable text for fingerprints: missing is empty, integral floats print as ints."""
+    if x is None or (not isinstance(x, str) and bool(pd.isna(x))):
+        return ""
+    x = _plain(x)
+    if isinstance(x, float) and x.is_integer():
+        return str(int(x))
+    return str(x)
+
+
+def fingerprint_rows(columns: dict[str, Iterable[Any]]) -> str:
+    """sha256 over rows of named columns, independent of row order."""
+    names = list(columns)
+    texts = [[canonical_text(v) for v in col] for col in columns.values()]
+    rows = sorted("\x1f".join(parts) for parts in zip(*texts, strict=True))
+    digest = hashlib.sha256("\x1f".join(names).encode("utf-8"))
+    for row in rows:
+        digest.update(b"\n" + row.encode("utf-8"))
+    return digest.hexdigest()
+
+
 class RatingFrame:
     """Validated long-form ratings.
 
@@ -67,6 +89,19 @@ class RatingFrame:
         self._data = data
         self._declared = declared
         self._implicit_status = implicit_status
+        self._fingerprint: str | None = None
+
+    def fingerprint(self) -> str:
+        """sha256 of the validated ratings (declared fields only).
+
+        Rows are sorted before hashing, and values are written as canonical text,
+        so the fingerprint ignores row order and dtype changes such as ``1`` vs
+        ``1.0``.
+        """
+        if self._fingerprint is None:
+            fields = [f for f in FIELDS if f in self._declared]
+            self._fingerprint = fingerprint_rows({f: self._data[f] for f in fields})
+        return self._fingerprint
 
     @classmethod
     def from_long(

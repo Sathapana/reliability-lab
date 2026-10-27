@@ -1,15 +1,20 @@
 """Typed results: alpha estimates, intervals, comparisons and their serialisation.
 
-File output (JSON, Parquet) and the provenance manifest arrive in phase 3. For now
-results convert to JSON-safe dicts and pandas tables.
+Every result converts to a versioned, JSON-safe dict with its provenance
+(``to_dict`` / ``to_json``) and to tidy pandas tables (``tables`` /
+``to_parquet``).
 """
 
 from __future__ import annotations
 
+import importlib.util
+import json
 import math
+import os
 import warnings
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
@@ -42,6 +47,44 @@ def emit(category: type[ReliabilityWarning], message: str, stacklevel: int) -> R
     """
     warnings.warn(message, category, stacklevel=stacklevel + 1)
     return RecordedWarning(category.__name__, message)
+
+
+#: Version of the JSON layout of every result type.
+SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True, eq=False)
+class Provenance:
+    """Where a result came from: software, data, declarations, split and known gaps.
+
+    ``ratings_fingerprint`` is the sha256 of the validated ratings
+    (:meth:`RatingFrame.fingerprint`). ``split`` describes the partition when the
+    study came from a split. ``gaps`` lists what the data cannot vouch for, such as
+    a missing status column or model family.
+    """
+
+    versions: Mapping[str, str]
+    platform: str
+    created_at: str
+    ratings_fingerprint: str
+    n_rows: int
+    declarations: Mapping[str, Any]
+    split: Mapping[str, Any] | None
+    gaps: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return _jsonable(  # type: ignore[no-any-return]
+            {
+                "versions": dict(self.versions),
+                "platform": self.platform,
+                "created_at": self.created_at,
+                "ratings_fingerprint": self.ratings_fingerprint,
+                "n_rows": self.n_rows,
+                "declarations": dict(self.declarations),
+                "split": None if self.split is None else dict(self.split),
+                "gaps": list(self.gaps),
+            }
+        )
 
 
 @dataclass(frozen=True, eq=False)
@@ -153,6 +196,7 @@ class AlphaResult:
     coverage: Coverage
     warnings: tuple[RecordedWarning, ...]
     notes: tuple[str, ...]
+    provenance: Provenance | None = None
     _sample: StudySample | None = field(default=None, repr=False)
 
     @property
@@ -214,11 +258,47 @@ class AlphaResult:
         """One row per estimate."""
         return pd.DataFrame([e.summary_row() for e in self.estimates.values()])
 
+    def tables(self) -> dict[str, pd.DataFrame]:
+        """Tidy tables: ``estimates``, ``per_unit``, ``coincidence`` (long) and ``coverage``."""
+        per_unit = pd.concat(
+            [e.per_unit.assign(estimate=name) for name, e in self.estimates.items()],
+            ignore_index=True,
+        )
+        coincidence = pd.concat(
+            [
+                pd.DataFrame(
+                    {
+                        "estimate": name,
+                        "value_a": np.repeat(e.coincidence.index.to_numpy(), len(e.coincidence)),
+                        "value_b": np.tile(e.coincidence.columns.to_numpy(), len(e.coincidence)),
+                        "coincidence": e.coincidence.to_numpy().ravel(),
+                        "expected": e.expected.to_numpy().ravel(),
+                    }
+                )
+                for name, e in self.estimates.items()
+            ],
+            ignore_index=True,
+        )
+        return {
+            "estimates": self.to_frame(),
+            "per_unit": per_unit[["estimate", *self.estimates["as_missing"].per_unit.columns]],
+            "coincidence": coincidence,
+            "coverage": self.coverage.per_coder.reset_index(),
+        }
+
+    def to_json(self, path: str | os.PathLike[str] | None = None) -> str:
+        """Strict JSON of :meth:`to_dict`, written as UTF-8 when ``path`` is given."""
+        return _write_json(self.to_dict(), path)
+
+    def to_parquet(self, directory: str | os.PathLike[str]) -> Path:
+        """Write each of :meth:`tables` as Parquet, plus ``result.json`` (needs pyarrow)."""
+        return _write_parquet(self.tables(), self.to_dict(), directory)
+
     def to_dict(self) -> dict[str, Any]:
         return _jsonable(  # type: ignore[no-any-return]
             {
-                "kind": "alpha_result",
-                "reliability_lab_version": __version__,
+                **_header("alpha-result"),
+                "provenance": None if self.provenance is None else self.provenance.to_dict(),
                 "design": self.design,
                 "measurement": self.measurement,
                 "values": list(self.values),
@@ -334,9 +414,27 @@ class BootstrapResult:
     intervals: Mapping[str, Interval]
     warnings: tuple[RecordedWarning, ...]
     notes: tuple[str, ...]
+    provenance: Provenance | None = None
 
     def __getitem__(self, name: str) -> Interval:
         return self.intervals[name]
+
+    def tables(self) -> dict[str, pd.DataFrame]:
+        """Tidy tables: ``intervals`` and ``replicates`` (estimate, replicate, alpha)."""
+        return {
+            "intervals": self.to_frame(),
+            "replicates": _replicates({n: {"alpha": i} for n, i in self.intervals.items()}),
+        }
+
+    def to_json(
+        self, path: str | os.PathLike[str] | None = None, *, include_distribution: bool = False
+    ) -> str:
+        """Strict JSON of :meth:`to_dict`, written as UTF-8 when ``path`` is given."""
+        return _write_json(self.to_dict(include_distribution), path)
+
+    def to_parquet(self, directory: str | os.PathLike[str]) -> Path:
+        """Write each of :meth:`tables` as Parquet, plus ``result.json`` (needs pyarrow)."""
+        return _write_parquet(self.tables(), self.to_dict(), directory)
 
     def describe(self) -> str:
         """One line naming the scheme, method, level and seed."""
@@ -372,8 +470,8 @@ class BootstrapResult:
     def to_dict(self, include_distribution: bool = False) -> dict[str, Any]:
         return _jsonable(  # type: ignore[no-any-return]
             {
-                "kind": "bootstrap_result",
-                "reliability_lab_version": __version__,
+                **_header("bootstrap-result"),
+                "provenance": None if self.provenance is None else self.provenance.to_dict(),
                 "design": self.design,
                 "measurement": self.measurement,
                 **self.metadata(),
@@ -444,11 +542,41 @@ class ComparisonResult:
             rows.append(row)
         return pd.DataFrame(rows)
 
+    def tables(self) -> dict[str, pd.DataFrame]:
+        """Tidy tables: ``differences`` and ``replicates`` (alpha_a, alpha_b, difference)."""
+        return {
+            "differences": self.to_frame(),
+            "replicates": _replicates(
+                {
+                    name: {
+                        "alpha_a": self.arm_a[name],
+                        "alpha_b": self.arm_b[name],
+                        "difference": diff,
+                    }
+                    for name, diff in self.differences.items()
+                }
+            ),
+        }
+
+    def to_json(
+        self, path: str | os.PathLike[str] | None = None, *, include_distribution: bool = False
+    ) -> str:
+        """Strict JSON of :meth:`to_dict`, written as UTF-8 when ``path`` is given."""
+        return _write_json(self.to_dict(include_distribution), path)
+
+    def to_parquet(self, directory: str | os.PathLike[str]) -> Path:
+        """Write each of :meth:`tables` as Parquet, plus ``result.json`` (needs pyarrow)."""
+        return _write_parquet(self.tables(), self.to_dict(), directory)
+
     def to_dict(self, include_distribution: bool = False) -> dict[str, Any]:
+        provenance = {
+            arm: None if res.provenance is None else res.provenance.to_dict()
+            for arm, res in (("a", self.result_a), ("b", self.result_b))
+        }
         return _jsonable(  # type: ignore[no-any-return]
             {
-                "kind": "comparison_result",
-                "reliability_lab_version": __version__,
+                **_header("comparison-result"),
+                "provenance": provenance,
                 "claim": self.claim,
                 "a": dict(self.a),
                 "b": dict(self.b),
@@ -504,6 +632,64 @@ def _append_warnings_and_notes(
 
 def _warning_dicts(warns: tuple[RecordedWarning, ...]) -> list[dict[str, str]]:
     return [{"category": w.category, "message": w.message} for w in warns]
+
+
+def _header(kind: str) -> dict[str, Any]:
+    return {
+        "schema": f"reliability-lab/{kind}",
+        "schema_version": SCHEMA_VERSION,
+        "reliability_lab_version": __version__,
+    }
+
+
+def _replicates(columns: Mapping[str, Mapping[str, Interval]]) -> pd.DataFrame:
+    """Long table of replicates: one row per estimate and replicate."""
+    frames = []
+    for name, intervals in columns.items():
+        first = next(iter(intervals.values()))
+        frame = pd.DataFrame({"estimate": name, "replicate": np.arange(len(first.distribution))})
+        for column, interval in intervals.items():
+            frame[column] = interval.distribution
+        frames.append(frame)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def _write_json(payload: dict[str, Any], path: str | os.PathLike[str] | None) -> str:
+    text = json.dumps(payload, indent=2, allow_nan=False)
+    if path is not None:
+        Path(path).write_text(text, encoding="utf-8")
+    return text
+
+
+def _has_pyarrow() -> bool:
+    return importlib.util.find_spec("pyarrow") is not None
+
+
+def _write_parquet(
+    tables: Mapping[str, pd.DataFrame], payload: dict[str, Any], directory: str | os.PathLike[str]
+) -> Path:
+    if not _has_pyarrow():
+        raise ImportError(
+            "to_parquet needs pyarrow; install it with: pip install 'reliability-lab[parquet]'"
+        )
+    out = Path(directory)
+    out.mkdir(parents=True, exist_ok=True)
+    for name, frame in tables.items():
+        _arrow_safe(frame).to_parquet(out / f"{name}.parquet", index=False)
+    _write_json(payload, out / "result.json")
+    return out
+
+
+def _arrow_safe(frame: pd.DataFrame) -> pd.DataFrame:
+    """Cast object columns that mix types (say ints and ``"<error>"``) to text."""
+    out = frame.copy()
+    for column in out.columns:
+        if out[column].dtype != object:
+            continue
+        kinds = {type(_jsonable(v)) for v in out[column] if v is not None and not pd.isna(v)}
+        if len(kinds) > 1:
+            out[column] = [None if v is None or pd.isna(v) else str(v) for v in out[column]]
+    return out
 
 
 def _fmt(x: float) -> str:

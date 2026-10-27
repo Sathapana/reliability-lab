@@ -20,7 +20,7 @@ keywords = [
     "evaluation",
 ]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
@@ -53,6 +53,9 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "pandas-stubs>=2.1",
+    # Exercise the optional extras in tests; they stay optional at runtime.
+    "scikit-learn>=1.4",
+    "pyarrow>=15",
 ]
 # Reference implementations used only by the parity tests. `krippendorff` is
 # GPL-licensed, so it must never become a runtime dependency. `irrCAC` is not
