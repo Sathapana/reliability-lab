@@ -241,22 +241,28 @@ def test_order_robustness_checks() -> None:
     assert "order_swap" in result.diagnostics
 
 
-def test_order_robustness_needs_one_model_and_condition_coders() -> None:
+def test_order_robustness_is_per_judge_and_needs_condition_coders() -> None:
     trace = order_trace(["A,B", "B,A"])
-    rows = [(f"i{i}", m, c, "A") for i in range(4) for m in ("m1", "m2") for c in ("p1", "p2")]
+    rows = [
+        (f"i{i}", m, c, ["A", "B"][(i + k) % 2])
+        for i in range(6)
+        for m in ("m1", "m2")
+        for k, c in enumerate(("p1", "p2"))
+    ]
     df = pd.DataFrame(rows, columns=["item", "model", "condition", "label"])
     two_models = RatingFrame.from_long(
         df, unit="item", rater="model", value="label", model_id="model", condition_id="condition"
     )
-    with pytest.raises(DesignError, match="one judge"):
-        ReliabilityStudy(
-            two_models,
-            measurement="nominal",
-            values=["A", "B"],
-            coders=["model_id", "condition_id"],
-            design="order_robustness",
-            trace=trace,
-        )
+    study = ReliabilityStudy(
+        two_models,
+        measurement="nominal",
+        values=["A", "B"],
+        coders="condition_id",
+        design="order_robustness",
+        trace=trace,
+    )
+    with pytest.raises(DesignError, match="holds 2 judge configurations"):
+        study.alpha()
     with pytest.raises(DesignError, match="include 'condition_id'"):
         ReliabilityStudy(
             pairwise_ratings(),

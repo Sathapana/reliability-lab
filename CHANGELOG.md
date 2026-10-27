@@ -7,7 +7,8 @@
 LLM judge workflows.
 
 - `TraceSidecar`: one row per judge configuration (`condition_id`). It records provider, prompt hash, rubric and parser versions, temperature, seed, determinism, candidate order, request time and retry policy.
-- Each study checks its trace against its design. Configurations that differ in more than the design compares raise a `TraceWarning`; missing conditions or fields become provenance gaps. Comparisons report which trace fields changed between the arms (`configuration_diff`).
+- Each study checks its trace against its design. Configurations that differ in more than the design compares raise a `TraceWarning`; missing conditions or fields become provenance gaps. Comparisons report the model and trace fields that changed between the arms (`configuration_diff`).
+- The single-configuration designs (repeatability, prompt robustness, order robustness) can hold several judge configurations for `compare()`. Each configuration is checked on its own, and `alpha()` refuses to pool them.
 - `order_robustness` design for pairwise judges whose candidates are shown in swapped orders.
 - Diagnostics on every result (`AlphaResult.diagnostics`):
   - `coder_agreement` (pairwise exact agreement);

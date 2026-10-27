@@ -168,8 +168,10 @@ def test_configuration_change_recovers_the_better_prompt() -> None:
     assert payload["configuration_diff"]["prompt_hash"]["b"] == ["h-v2"]
 
 
-def order_study(trace: TraceSidecar | None) -> ReliabilityStudy:
-    log, _ = order_swap_log()
+def order_study(
+    trace: TraceSidecar | None, judges: tuple[tuple[str, float], ...] = (("judge-x", 0.4),)
+) -> ReliabilityStudy:
+    log, _ = order_swap_log(judges=judges)
     ratings = RatingFrame.from_long(
         log,
         unit="item",
@@ -217,3 +219,63 @@ def test_order_swap_needs_candidate_order() -> None:
     no_order = TraceSidecar.from_frame(conditions, condition="condition", prompt_hash="prompt_hash")
     with pytest.raises(DesignError, match="needs candidate_order"):
         order_study(no_order)
+
+
+# -- configuration changes within single-configuration designs ----------------------
+
+
+def test_repeatability_compared_across_two_configurations() -> None:
+    log, conditions = repeatability_log(
+        configs=(("cfg-hot", 0.7, 0.6), ("cfg-cold", 0.0, 0.95)), seed=5
+    )
+    ratings = RatingFrame.from_long(
+        log,
+        unit="unit",
+        rater="model",
+        value="score",
+        status="status",
+        group="conversation",
+        model_id="model",
+        model_family="family",
+        condition_id="condition",
+        run_id="run",
+        attempt="attempt",
+    )
+    study = ReliabilityStudy(
+        ratings,
+        measurement="ordinal",
+        values=SCORES,
+        coders="run_id",
+        design="repeatability",
+        trace=trace_of(conditions),
+        retries="last",
+    )
+    with pytest.raises(DesignError, match="holds 2 judge configurations"):
+        study.alpha()
+    diff = study.compare(
+        a={"condition_id": "cfg-hot"}, b={"condition_id": "cfg-cold"}, random_state=6
+    )
+    change = diff["as_missing"]
+    assert change.point > 0 and change.low > 0  # the cold configuration repeats itself more
+    assert diff.arm_a.level == "group"
+    assert diff.configuration_diff == {"temperature": {"a": ["0.7"], "b": ["0"]}}
+    hot = diff.result_a.diagnostics["run_agreement"].values["unanimous_share"]
+    cold = diff.result_b.diagnostics["run_agreement"].values["unanimous_share"]
+    assert cold > hot
+    assert any("Temperature is 0.7" in f for f in diff.result_a.trace_findings)
+
+
+def test_order_robustness_compared_across_two_judges() -> None:
+    _, conditions = order_swap_log()
+    study = order_study(trace_of(conditions), judges=(("judge-x", 0.4), ("judge-y", 0.0)))
+    with pytest.raises(DesignError, match="holds 2 judge configurations"):
+        study.alpha()
+    diff = study.compare(a={"model_id": "judge-x"}, b={"model_id": "judge-y"}, random_state=7)
+    change = diff["as_missing"]
+    assert change.point > 0 and change.low > 0  # the unbiased judge is more order-robust
+    assert diff.configuration_diff == {"model_id": {"a": ["judge-x"], "b": ["judge-y"]}}
+    biased = diff.result_a.diagnostics["order_swap"].values
+    fair = diff.result_b.diagnostics["order_swap"].values
+    assert biased["p_first_shown_wins_low"] <= 0.7 <= biased["p_first_shown_wins_high"]
+    assert fair["p_first_shown_wins_low"] <= 0.5 <= fair["p_first_shown_wins_high"]
+    assert "configuration changes: model_id" in diff.summary()

@@ -227,6 +227,17 @@ class TraceCheck:
     gaps: tuple[str, ...] = ()
 
 
+def merge_trace_checks(checks: Iterable[TraceCheck]) -> TraceCheck:
+    """Combine the checks of several configurations, dropping repeated messages."""
+    collected = list(checks)
+    return TraceCheck(
+        *(
+            tuple(dict.fromkeys(message for c in collected for message in getattr(c, part)))
+            for part in ("confounds", "notes", "gaps")
+        )
+    )
+
+
 def check_trace(
     design: Design,
     trace: TraceSidecar | None,

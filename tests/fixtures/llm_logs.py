@@ -19,50 +19,54 @@ def _noisy(rng: np.random.Generator, truth: int, accuracy: float) -> int:
 
 
 def repeatability_log(
-    n_units: int = 60, runs: int = 3, seed: int = 0
+    n_units: int = 60,
+    runs: int = 3,
+    seed: int = 0,
+    configs: tuple[tuple[str, float, float], ...] = (("cfg-1", 0.7, 0.8),),
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """One judge configuration called ``runs`` times per unit at temperature 0.7.
+    """One judge called ``runs`` times per unit under each configuration.
 
-    About 15% of calls fail to parse on the first attempt and succeed on a retry;
-    about 3% fail on both attempts.
+    ``configs`` lists (condition, temperature, accuracy). The default is a single
+    configuration at temperature 0.7. About 15% of calls fail to parse on the first
+    attempt and succeed on a retry; about 3% fail on both attempts.
     """
     rng = np.random.default_rng(seed)
     rows = []
     for u in range(n_units):
         truth = int(rng.integers(1, 6))
-        for run in range(1, runs + 1):
-            base = {
-                "unit": f"u{u}",
-                "conversation": f"c{u // 3}",
-                "model": "judge-x",
-                "family": "fam-x",
-                "condition": "cfg-1",
-                "run": run,
-            }
-            draw = rng.random()
-            if draw < 0.03:
-                rows.append({**base, "attempt": 1, "status": "parse_error", "score": None})
-                rows.append({**base, "attempt": 2, "status": "parse_error", "score": None})
-            elif draw < 0.18:
-                rows.append({**base, "attempt": 1, "status": "parse_error", "score": None})
-                rows.append(
-                    {**base, "attempt": 2, "status": "observed", "score": _noisy(rng, truth, 0.8)}
-                )
-            else:
-                rows.append(
-                    {**base, "attempt": 1, "status": "observed", "score": _noisy(rng, truth, 0.8)}
-                )
+        for condition, _, accuracy in configs:
+            for run in range(1, runs + 1):
+                base = {
+                    "unit": f"u{u}",
+                    "conversation": f"c{u // 3}",
+                    "model": "judge-x",
+                    "family": "fam-x",
+                    "condition": condition,
+                    "run": run,
+                }
+                draw = rng.random()
+                if draw < 0.03:
+                    rows.append({**base, "attempt": 1, "status": "parse_error", "score": None})
+                    rows.append({**base, "attempt": 2, "status": "parse_error", "score": None})
+                elif draw < 0.18:
+                    rows.append({**base, "attempt": 1, "status": "parse_error", "score": None})
+                    score = _noisy(rng, truth, accuracy)
+                    rows.append({**base, "attempt": 2, "status": "observed", "score": score})
+                else:
+                    score = _noisy(rng, truth, accuracy)
+                    rows.append({**base, "attempt": 1, "status": "observed", "score": score})
     conditions = pd.DataFrame(
         [
             {
-                "condition": "cfg-1",
+                "condition": condition,
                 "provider": "acme",
                 "prompt_hash": "h-111",
                 "rubric_version": "r1",
-                "temperature": 0.7,
+                "temperature": temperature,
                 "parser_version": "1.2",
                 "retry_policy": "retry once on parse error",
             }
+            for condition, temperature, _ in configs
         ]
     )
     return pd.DataFrame(rows), conditions
@@ -132,35 +136,39 @@ def configuration_change_log(n_units: int = 80, seed: int = 2) -> tuple[pd.DataF
     return pd.DataFrame(rows), conditions
 
 
-def order_swap_log(n_items: int = 200, seed: int = 3) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """One pairwise judge shown each item in both orders, with a planted position bias.
+def order_swap_log(
+    n_items: int = 200, seed: int = 3, judges: tuple[tuple[str, float], ...] = (("judge-x", 0.4),)
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Pairwise judges shown each item in both orders, with planted position biases.
 
-    The judge picks the candidate shown first with probability 0.4 regardless of
-    merit, and otherwise the true winner; 5% of its answers are ties. Among decisive
-    answers, the candidate shown first therefore wins with probability 0.7.
+    ``judges`` lists (model, bias). A judge picks the candidate shown first with
+    probability ``bias`` regardless of merit, and otherwise the true winner; 5% of
+    its answers are ties. With the default bias of 0.4, the candidate shown first
+    wins 0.4 + 0.6 * 0.5 = 0.7 of the decisive answers.
     """
     rng = np.random.default_rng(seed)
     orders = {"ab": ("A", "B"), "ba": ("B", "A")}
     rows = []
     for i in range(n_items):
         winner = "A" if rng.random() < 0.5 else "B"
-        for condition, order in orders.items():
-            if rng.random() < 0.05:
-                label = "tie"
-            elif rng.random() < 0.4:
-                label = order[0]
-            else:
-                label = winner
-            rows.append(
-                {
-                    "item": f"i{i}",
-                    "model": "judge-x",
-                    "family": "fam-x",
-                    "condition": condition,
-                    "status": "observed",
-                    "label": label,
-                }
-            )
+        for model, bias in judges:
+            for condition, order in orders.items():
+                if rng.random() < 0.05:
+                    label = "tie"
+                elif rng.random() < bias:
+                    label = order[0]
+                else:
+                    label = winner
+                rows.append(
+                    {
+                        "item": f"i{i}",
+                        "model": model,
+                        "family": f"fam-{model[-1]}",
+                        "condition": condition,
+                        "status": "observed",
+                        "label": label,
+                    }
+                )
     conditions = pd.DataFrame(
         {
             "condition": ["ab", "ba"],

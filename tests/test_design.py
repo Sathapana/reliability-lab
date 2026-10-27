@@ -147,10 +147,14 @@ def test_repeatability() -> None:
     ok = study(grid([("m1", "f1")], ["p1"], [1, 2, 3]), "repeatability", ["run_id"])
     assert ok.design is Design.REPEATABILITY
     assert "not inter-coder reliability" in ok.alpha().notes[0]
-    with pytest.raises(DesignError, match="one judge configuration"):
-        study(
-            grid([("m1", "f1")], ["p1", "p2"], [1, 2]), "repeatability", ["condition_id", "run_id"]
-        )
+    # Several configurations: each is checked, but only compare() can estimate.
+    several = study(grid([("m1", "f1")], ["p1", "p2"], [1, 2]), "repeatability", ["run_id"])
+    with pytest.raises(DesignError, match="holds 2 judge configurations"):
+        several.alpha()
+    diff = several.compare({"condition_id": "p1"}, {"condition_id": "p2"}, n_resamples=20)
+    assert "run_agreement" in diff.result_a.diagnostics
+    with pytest.raises(DesignError, match="include 'run_id'"):
+        study(grid([("m1", "f1")], ["p1", "p2"], [1, 2]), "repeatability", ["condition_id"])
     with pytest.raises(DesignError, match="include 'run_id'"):
         study(grid([("m1", "f1")], ["p1"], [1, 2]), "repeatability", ["model_id"])
 
@@ -158,12 +162,15 @@ def test_repeatability() -> None:
 def test_prompt_robustness() -> None:
     ok = study(grid([("m1", "f1")], ["p1", "p2"], [1]), "prompt_robustness", ["condition_id"])
     assert ok.design is Design.PROMPT_ROBUSTNESS
-    with pytest.raises(DesignError, match="one model"):
-        study(
-            grid([("m1", "f1"), ("m2", "f2")], ["p1", "p2"], [1]),
-            "prompt_robustness",
-            ["model_id", "condition_id"],
-        )
+    two_models = study(
+        grid([("m1", "f1"), ("m2", "f2")], ["p1", "p2"], [1]),
+        "prompt_robustness",
+        ["condition_id"],
+    )
+    with pytest.raises(DesignError, match="holds 2 judge configurations"):
+        two_models.alpha()
+    diff = two_models.compare({"model_id": "m1"}, {"model_id": "m2"}, n_resamples=20)
+    assert diff.configuration_diff == {"model_id": {"a": ["m1"], "b": ["m2"]}}
     with pytest.raises(DesignError, match="include 'condition_id'"):
         study(grid([("m1", "f1")], ["p1", "p2"], [1]), "prompt_robustness", ["model_id"])
 

@@ -35,7 +35,13 @@ from reliability_lab.alpha import (
     compute_alpha,
 )
 from reliability_lab.data import ERROR_STATUSES, RatingFrame, Status, _plain, preview
-from reliability_lab.design import CoderSpec, Design, check_design
+from reliability_lab.design import (
+    SINGLE_CONFIGURATION,
+    CoderSpec,
+    Design,
+    check_design,
+    configuration_masks,
+)
 from reliability_lab.exceptions import (
     CategorySkewWarning,
     DesignError,
@@ -52,6 +58,7 @@ from reliability_lab.llm import (
     check_trace,
     coder_agreement,
     configuration_diff,
+    merge_trace_checks,
     order_swap,
     run_agreement,
 )
@@ -189,9 +196,16 @@ class ReliabilityStudy:
         for category, message in check.warnings:
             self._warnings.append(emit(category, message, stacklevel=2))
         self._notes = check.notes
+        #: Judge configurations of a single-configuration design (one, unless the
+        #: study is a parent for compare()).
+        self._configurations = check.configurations
 
         data = resolved._data
-        self._trace_check = check_trace(self._design, trace, data, self._values)
+        # Trace checks, like design checks, apply configuration by configuration.
+        self._trace_check = merge_trace_checks(
+            check_trace(self._design, trace, data[mask], self._values)
+            for _, mask in configuration_masks(self._design, data)
+        )
         for message in self._trace_check.confounds:
             self._warnings.append(emit(TraceWarning, message, stacklevel=2))
         self._attempt_status = ratings._data["status"].to_numpy(dtype=object)
@@ -351,8 +365,18 @@ class ReliabilityStudy:
         """Alpha under every declared missing-data policy, with diagnostics.
 
         Raises :class:`UndefinedAlphaError` when the reference (``as_missing``)
-        estimate is undefined.
+        estimate is undefined, and :class:`DesignError` when a single-configuration
+        design (repeatability, prompt or order robustness) holds several judge
+        configurations: such a study can only be compared, arm by arm.
         """
+        if len(self._configurations) > 1:
+            keys = SINGLE_CONFIGURATION[self._design]
+            raise DesignError(
+                f"this {self._design.value} study holds {len(self._configurations)} judge "
+                f"configurations ({', '.join(keys)}: {preview(self._configurations)}), and "
+                f"{self._design.value} is measured on one. Compare them with "
+                "study.compare(a=..., b=...), or filter the ratings to one configuration."
+            )
         base = self._value_idx >= 0
         reference = self._compute(self._unit_codes[base], self._value_idx[base], self._values)
         estimates: dict[str, AlphaEstimate] = {}
@@ -501,21 +525,29 @@ class ReliabilityStudy:
             method=method,
             random_state=random_state,
         )
+        # What changed between the arms: the model (from the ratings) and, when a
+        # trace is given, the recorded configuration fields.
+        diff: dict[str, dict[str, list[Any]]] = {}
+        models_a, models_b = arm_a._models(), arm_b._models()
+        if models_a != models_b:
+            diff["model_id"] = {"a": models_a, "b": models_b}
+        notes = list(result.notes)
         if self._trace is None:
-            return dataclasses.replace(
-                result,
-                notes=(
-                    *result.notes,
-                    "No trace sidecar: what changed between a and b is not recorded.",
-                ),
+            notes.append(
+                "No trace sidecar: changes in prompt, parser or generation settings between "
+                "a and b are not recorded."
             )
-        diff = configuration_diff(self._trace, arm_a._conditions(), arm_b._conditions())
-        note = (
-            f"The configurations differ in {', '.join(diff)}."
-            if diff
-            else "The trace records no difference between the configurations."
+        else:
+            diff.update(configuration_diff(self._trace, arm_a._conditions(), arm_b._conditions()))
+        if diff:
+            notes.append(f"The configurations differ in {', '.join(diff)}.")
+        elif self._trace is not None:
+            notes.append("The trace records no difference between the configurations.")
+        return dataclasses.replace(
+            result,
+            configuration_diff=diff if diff or self._trace is not None else None,
+            notes=tuple(notes),
         )
-        return dataclasses.replace(result, configuration_diff=diff, notes=(*result.notes, note))
 
     # -- internals ----------------------------------------------------------------
 
@@ -572,6 +604,11 @@ class ReliabilityStudy:
     def _conditions(self) -> list[Any]:
         """The LLM configurations (condition ids) this study's counted ratings use."""
         return [c for c in pd.unique(self._condition_ids) if not pd.isna(c)]
+
+    def _models(self) -> list[Any]:
+        """The model ids of this study's LLM rows, sorted by their text."""
+        models = self._ratings._data["model_id"]
+        return sorted((_plain(m) for m in pd.unique(models[models.notna()])), key=str)
 
     def _diagnostics(self, base: npt.NDArray[np.bool_]) -> dict[str, Diagnostic]:
         """Design-specific evidence, computed on the counted, pairable ratings."""

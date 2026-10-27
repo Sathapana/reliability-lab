@@ -137,7 +137,9 @@ result.trace_findings  # confounds and caveats from the trace
 | `prompt_robustness` | prompt conditions of one model | pairwise agreement between conditions |
 | `inter_model` | different models | pairwise agreement; family and configuration checks |
 | `order_robustness` | candidate orders of one pairwise judge | reversal rate and position bias |
-| configuration change | two configurations, via `study.compare(a=..., b=...)` | paired interval on the difference; the trace fields that changed |
+| configuration change | two configurations, via `study.compare(a=..., b=...)` | paired interval on the difference; the model and trace fields that changed |
+
+The single-configuration designs (repeatability, prompt robustness, order robustness) can hold several configurations to compare, such as an old and a new judge. Each configuration is checked on its own. `alpha()` refuses to pool them; `study.compare(a={"condition_id": "old"}, b={"condition_id": "new"})` reports each one's alpha and diagnostics, with a paired interval on the difference.
 
 Retried calls are never resolved silently. Number the attempts with an `attempt` column, then declare `retries="last"` or `retries="first_observed"`. Coverage then reports error rates both per attempt and for the attempts that count. See [`examples/llm_judge.py`](examples/llm_judge.py).
 

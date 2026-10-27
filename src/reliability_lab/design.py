@@ -135,10 +135,39 @@ def _label(x: Any) -> str:
 
 @dataclass(frozen=True)
 class DesignCheck:
-    """Outcome of checking a design against the data."""
+    """Outcome of checking a design against the data.
+
+    ``configurations`` lists the judge configurations of a single-configuration
+    design (one tuple of key values each). A study holding several can be
+    compared configuration by configuration, but has no alpha of its own.
+    """
 
     notes: tuple[str, ...]
     warnings: tuple[tuple[type[ReliabilityWarning], str], ...]
+    configurations: tuple[tuple[Any, ...], ...] = ()
+
+
+#: Designs measured on one judge configuration, and the fields that identify it.
+SINGLE_CONFIGURATION: dict[Design, tuple[str, ...]] = {
+    Design.REPEATABILITY: ("model_id", "condition_id"),
+    Design.PROMPT_ROBUSTNESS: ("model_id",),
+    Design.ORDER_ROBUSTNESS: ("model_id",),
+}
+
+
+def configuration_masks(
+    design: Design, data: pd.DataFrame
+) -> list[tuple[tuple[Any, ...], npt.NDArray[np.bool_]]]:
+    """Each judge configuration of a single-configuration design, with its row mask.
+
+    Other designs, and data with one configuration, give a single all-rows entry.
+    """
+    keys = SINGLE_CONFIGURATION.get(design)
+    if keys is None:
+        return [((), np.ones(len(data), dtype=bool))]
+    frame = data[list(keys)].astype(object)
+    codes, uniques = pd.factorize(pd.MultiIndex.from_frame(frame), sort=False)
+    return [(tuple(_label(v) for v in key), codes == i) for i, key in enumerate(uniques)]
 
 
 def check_design(
@@ -147,7 +176,11 @@ def check_design(
     coders: CoderSpec,
     coder_labels: npt.NDArray[np.object_],
 ) -> DesignCheck:
-    """Refuse designs the data cannot support, and collect the caveats of the rest."""
+    """Refuse designs the data cannot support, and collect the caveats of the rest.
+
+    A single-configuration design (repeatability, prompt or order robustness)
+    holding several configurations is checked configuration by configuration.
+    """
     if design in _NOT_YET:
         raise NotImplementedError(_NOT_YET[design])
     data = ratings._data
@@ -162,25 +195,25 @@ def check_design(
     if design in LLM_DESIGNS and not is_llm.all():
         raise DesignError(f"{design.value} needs LLM rows (rows with a model_id)")
 
+    configurations = configuration_masks(design, data)
+    if len(configurations) > 1:
+        checks = [
+            check_design(design, ratings._subset(mask), coders, coder_labels[mask])
+            for _, mask in configurations
+        ]
+        return DesignCheck(
+            notes=checks[0].notes,
+            warnings=tuple(dict.fromkeys(w for c in checks for w in c.warnings)),
+            configurations=tuple(key for key, _ in configurations),
+        )
+
     warnings: list[tuple[type[ReliabilityWarning], str]] = []
     if design is Design.REPEATABILITY:
-        configs = data[["model_id", "condition_id"]].drop_duplicates()
-        if len(configs) > 1:
-            raise DesignError(
-                "repeatability is measured on one judge configuration; the ratings hold "
-                f"{len(configs)} (model_id, condition_id) pairs. Filter to one configuration."
-            )
         if "run_id" not in coders.by:
             raise DesignError(
                 "repeatability coders are repeated runs: include 'run_id' in CoderSpec(by=...)"
             )
     elif design is Design.PROMPT_ROBUSTNESS:
-        models = pd.unique(data["model_id"])
-        if len(models) > 1:
-            raise DesignError(
-                f"prompt_robustness compares prompts on one model; found {len(models)} models "
-                f"{preview(models)}"
-            )
         if "condition_id" not in coders.by:
             raise DesignError(
                 "prompt_robustness coders are prompt conditions: include 'condition_id' in "
@@ -193,18 +226,11 @@ def check_design(
             )
         if data["model_id"].nunique() < 2:
             raise DesignError("inter_model needs at least two distinct model_id values")
-    elif design is Design.ORDER_ROBUSTNESS:
-        models = pd.unique(data["model_id"])
-        if len(models) > 1:
-            raise DesignError(
-                f"order_robustness swaps candidate order for one judge; found {len(models)} "
-                f"models {preview(models)}"
-            )
-        if "condition_id" not in coders.by:
-            raise DesignError(
-                "order_robustness coders are candidate-order conditions: include "
-                "'condition_id' in CoderSpec(by=...)"
-            )
+    elif design is Design.ORDER_ROBUSTNESS and "condition_id" not in coders.by:
+        raise DesignError(
+            "order_robustness coders are candidate-order conditions: include "
+            "'condition_id' in CoderSpec(by=...)"
+        )
 
     coders_present = pd.unique(coder_labels)
     if len(coders_present) < 2:
@@ -217,7 +243,11 @@ def check_design(
 
     _require_one_rating_per_coder(data["unit_id"].to_numpy(), coder_labels)
     notes = (DESIGN_NOTES[design],) if design in DESIGN_NOTES else ()
-    return DesignCheck(notes=notes, warnings=tuple(warnings))
+    return DesignCheck(
+        notes=notes,
+        warnings=tuple(warnings),
+        configurations=tuple(key for key, _ in configurations),
+    )
 
 
 def _dependence_warnings(
