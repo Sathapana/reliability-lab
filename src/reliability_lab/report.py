@@ -59,8 +59,9 @@ class Provenance:
 
     ``ratings_fingerprint`` is the sha256 of the validated ratings
     (:meth:`RatingFrame.fingerprint`). ``split`` describes the partition when the
-    study came from a split. ``gaps`` lists what the data cannot vouch for, such as
-    a missing status column or model family.
+    study came from a split. ``trace`` holds the trace sidecar's fields,
+    fingerprint and the rows of the conditions in use. ``gaps`` lists what the data
+    cannot vouch for, such as a missing status column, model family or trace field.
     """
 
     versions: Mapping[str, str]
@@ -71,6 +72,7 @@ class Provenance:
     declarations: Mapping[str, Any]
     split: Mapping[str, Any] | None
     gaps: tuple[str, ...]
+    trace: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return _jsonable(  # type: ignore[no-any-return]
@@ -82,7 +84,32 @@ class Provenance:
                 "n_rows": self.n_rows,
                 "declarations": dict(self.declarations),
                 "split": None if self.split is None else dict(self.split),
+                "trace": None if self.trace is None else dict(self.trace),
                 "gaps": list(self.gaps),
+            }
+        )
+
+
+@dataclass(frozen=True, eq=False)
+class Diagnostic:
+    """Design-specific evidence beside alpha, such as run unanimity or order flips.
+
+    ``values`` holds the headline numbers, ``table`` the detail (one row per coder
+    pair, unit or condition) and ``notes`` how to read them.
+    """
+
+    name: str
+    values: Mapping[str, Any]
+    table: pd.DataFrame | None = None
+    notes: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return _jsonable(  # type: ignore[no-any-return]
+            {
+                "name": self.name,
+                "values": dict(self.values),
+                "table": None if self.table is None else self.table.to_dict(orient="records"),
+                "notes": list(self.notes),
             }
         )
 
@@ -197,6 +224,8 @@ class AlphaResult:
     warnings: tuple[RecordedWarning, ...]
     notes: tuple[str, ...]
     provenance: Provenance | None = None
+    diagnostics: Mapping[str, Diagnostic] = field(default_factory=dict)
+    trace_findings: tuple[str, ...] = ()
     _sample: StudySample | None = field(default=None, repr=False)
 
     @property
@@ -259,7 +288,8 @@ class AlphaResult:
         return pd.DataFrame([e.summary_row() for e in self.estimates.values()])
 
     def tables(self) -> dict[str, pd.DataFrame]:
-        """Tidy tables: ``estimates``, ``per_unit``, ``coincidence`` (long) and ``coverage``."""
+        """Tidy tables: ``estimates``, ``per_unit``, ``coincidence`` (long), ``coverage``,
+        and ``diagnostic_<name>`` for each diagnostic with a table."""
         per_unit = pd.concat(
             [e.per_unit.assign(estimate=name) for name, e in self.estimates.items()],
             ignore_index=True,
@@ -279,12 +309,16 @@ class AlphaResult:
             ],
             ignore_index=True,
         )
-        return {
+        tables = {
             "estimates": self.to_frame(),
             "per_unit": per_unit[["estimate", *self.estimates["as_missing"].per_unit.columns]],
             "coincidence": coincidence,
             "coverage": self.coverage.per_coder.reset_index(),
         }
+        for name, diagnostic in self.diagnostics.items():
+            if diagnostic.table is not None:
+                tables[f"diagnostic_{name}"] = diagnostic.table
+        return tables
 
     def to_json(self, path: str | os.PathLike[str] | None = None) -> str:
         """Strict JSON of :meth:`to_dict`, written as UTF-8 when ``path`` is given."""
@@ -308,6 +342,8 @@ class AlphaResult:
                 "inapplicable_as": self.inapplicable_as,
                 "estimates": {k: e.to_dict() for k, e in self.estimates.items()},
                 "coverage": self.coverage.to_dict(),
+                "diagnostics": {k: d.to_dict() for k, d in self.diagnostics.items()},
+                "trace_findings": list(self.trace_findings),
                 "warnings": _warning_dicts(self.warnings),
                 "notes": list(self.notes),
             }
@@ -344,6 +380,14 @@ class AlphaResult:
                     f"{e.name}: {e.n_unanchored} failed attempts sit in units with no other "
                     "value and stay missing."
                 )
+        if self.diagnostics:
+            lines.append("\nDiagnostics")
+            for d in self.diagnostics.values():
+                shown = ", ".join(f"{k} {_fmt_any(v)}" for k, v in d.values.items())
+                lines.append(f"  {d.name}: {shown}")
+        if self.trace_findings:
+            lines.append("\nTrace findings")
+            lines.extend(f"  - {f}" for f in self.trace_findings)
         _append_warnings_and_notes(lines, self.warnings, self.notes)
         return "\n".join(lines)
 
@@ -510,7 +554,8 @@ class ComparisonResult:
     ``differences`` holds intervals on alpha_b - alpha_a, computed from the same
     resampled units or groups in every replicate. ``arm_a`` and ``arm_b`` hold each
     configuration's own intervals from those same resamples, and ``result_a`` and
-    ``result_b`` the arms' full alpha results.
+    ``result_b`` the arms' full alpha results. ``configuration_diff`` lists the trace
+    fields whose values differ between the arms (None without a trace sidecar).
     """
 
     claim: str
@@ -525,6 +570,7 @@ class ComparisonResult:
     differences: Mapping[str, Interval]
     warnings: tuple[RecordedWarning, ...]
     notes: tuple[str, ...]
+    configuration_diff: Mapping[str, Mapping[str, list[Any]]] | None = None
 
     def __getitem__(self, name: str) -> Interval:
         return self.differences[name]
@@ -588,6 +634,9 @@ class ComparisonResult:
                 },
                 "arm_a": self.arm_a.to_dict(include_distribution),
                 "arm_b": self.arm_b.to_dict(include_distribution),
+                "configuration_diff": None
+                if self.configuration_diff is None
+                else {k: dict(v) for k, v in self.configuration_diff.items()},
                 "warnings": _warning_dicts(self.warnings),
                 "notes": list(self.notes),
             }
@@ -599,6 +648,13 @@ class ComparisonResult:
             f"measurement: {self.measurement}",
             f"a: {dict(self.a)} | b: {dict(self.b)} | difference = b - a",
             self.arm_a.describe(),
+        ]
+        if self.configuration_diff:
+            changed = "; ".join(
+                f"{k}: {v['a']} -> {v['b']}" for k, v in self.configuration_diff.items()
+            )
+            lines.append(f"configuration changes: {changed}")
+        lines += [
             "",
             f"{'estimate':<26}{'alpha_a':>9}{'alpha_b':>9}{'diff':>9}{'low':>9}{'high':>9}"
             f"{'failed':>8}",
@@ -694,6 +750,12 @@ def _arrow_safe(frame: pd.DataFrame) -> pd.DataFrame:
 
 def _fmt(x: float) -> str:
     return "nan" if math.isnan(x) else f"{x:.3f}"
+
+
+def _fmt_any(x: Any) -> str:
+    if isinstance(x, float | np.floating):
+        return _fmt(float(x))
+    return str(x)
 
 
 def _matrix_dict(frame: pd.DataFrame) -> dict[str, Any]:

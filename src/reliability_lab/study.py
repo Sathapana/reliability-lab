@@ -8,6 +8,7 @@ study, and those inherit its declarations.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import os
 import platform
@@ -34,21 +35,39 @@ from reliability_lab.alpha import (
     compute_alpha,
 )
 from reliability_lab.data import ERROR_STATUSES, RatingFrame, Status, _plain, preview
-from reliability_lab.design import CoderSpec, Design, check_design
+from reliability_lab.design import (
+    SINGLE_CONFIGURATION,
+    CoderSpec,
+    Design,
+    check_design,
+    configuration_masks,
+)
 from reliability_lab.exceptions import (
     CategorySkewWarning,
     DesignError,
     DomainSizeWarning,
     ReliabilityWarning,
+    TraceWarning,
     UndefinedAlphaError,
 )
 from reliability_lab.inference import EstimateInput, StudySample
 from reliability_lab.inference import compare as compare_arms
+from reliability_lab.llm import (
+    CodedRatings,
+    TraceSidecar,
+    check_trace,
+    coder_agreement,
+    configuration_diff,
+    merge_trace_checks,
+    order_swap,
+    run_agreement,
+)
 from reliability_lab.report import (
     AlphaEstimate,
     AlphaResult,
     ComparisonResult,
     Coverage,
+    Diagnostic,
     Level,
     Method,
     Provenance,
@@ -58,6 +77,7 @@ from reliability_lab.report import (
 from reliability_lab.split import TEST, SplitManifest, UnitLayout, assign_units, make_manifests
 
 MissingPolicy = Literal["as_missing", "as_category", "sensitivity"]
+Retries = Literal["last", "first_observed"]
 
 MISSING_POLICIES: tuple[str, ...] = ("as_missing", "as_category", "sensitivity")
 #: Category that failed attempts become under the ``as_category`` policy.
@@ -117,6 +137,15 @@ class ReliabilityStudy:
     abstain_as, inapplicable_as:
         ``"missing"`` or a declared value. They are required whenever such rows
         exist, so abstentions are never treated silently.
+    trace:
+        A :class:`~reliability_lab.llm.TraceSidecar` describing each LLM
+        configuration (``condition_id``). The study checks that coders differ only
+        in what the design compares, and reports what the trace does not record.
+    retries:
+        Which attempt counts when a coder rated a unit several times (an
+        ``attempt`` column numbers them): ``"last"``, or ``"first_observed"`` (the
+        first observed attempt, else the last). Required whenever retries exist.
+        Error rates are reported per attempt and for the counted attempts.
     """
 
     def __init__(
@@ -130,10 +159,18 @@ class ReliabilityStudy:
         missing_policies: Sequence[MissingPolicy] | None = None,
         abstain_as: Any = None,
         inapplicable_as: Any = None,
+        trace: TraceSidecar | None = None,
+        retries: Retries | None = None,
     ) -> None:
         if not isinstance(ratings, RatingFrame):
             raise TypeError(f"ratings must be a RatingFrame, got {type(ratings).__name__}")
+        if trace is not None and not isinstance(trace, TraceSidecar):
+            raise TypeError(f"trace must be a TraceSidecar, got {type(trace).__name__}")
+        if retries not in (None, "last", "first_observed"):
+            raise DesignError(f"retries must be None, 'last' or 'first_observed'; got {retries!r}")
         self._ratings = ratings
+        self._trace = trace
+        self._retries = retries
         self._warnings: list[RecordedWarning] = []
         #: The manifest and partition this study was split into, if any.
         self._split: tuple[SplitManifest, str] | None = None
@@ -149,14 +186,32 @@ class ReliabilityStudy:
         self._coders = coders if isinstance(coders, CoderSpec) else CoderSpec(coders)
         self._design = _resolve_design(design)
 
-        coder_labels = self._coders.labels(ratings)
-        check = check_design(self._design, ratings, self._coders, coder_labels)
+        # Every attempt stays in self._ratings; estimation uses the counted attempt
+        # of each (unit, coder), selected by the retries declaration.
+        attempt_labels = self._coders.labels(ratings)
+        kept, self._n_retried = _resolve_retries(ratings, attempt_labels, retries)
+        resolved = ratings if kept is None else ratings._subset(kept)
+        coder_labels = attempt_labels if kept is None else attempt_labels[kept]
+        check = check_design(self._design, resolved, self._coders, coder_labels)
         for category, message in check.warnings:
             self._warnings.append(emit(category, message, stacklevel=2))
         self._notes = check.notes
+        #: Judge configurations of a single-configuration design (one, unless the
+        #: study is a parent for compare()).
+        self._configurations = check.configurations
 
-        data = ratings._data
+        data = resolved._data
+        # Trace checks, like design checks, apply configuration by configuration.
+        self._trace_check = merge_trace_checks(
+            check_trace(self._design, trace, data[mask], self._values)
+            for _, mask in configuration_masks(self._design, data)
+        )
+        for message in self._trace_check.confounds:
+            self._warnings.append(emit(TraceWarning, message, stacklevel=2))
+        self._attempt_status = ratings._data["status"].to_numpy(dtype=object)
+        self._attempt_coders = attempt_labels
         self._status = data["status"].to_numpy(dtype=object)
+        self._condition_ids = data["condition_id"].to_numpy(dtype=object)
         self._abstain_as = _resolve_status_value(
             "abstain_as", abstain_as, Status.ABSTAINED, self._status, self._values
         )
@@ -168,9 +223,13 @@ class ReliabilityStudy:
             missing_policies, self._distance, int(self._is_error.sum())
         )
 
-        unit_codes, unit_labels = pd.factorize(data["unit_id"], sort=False)
+        # Unit codes are taken over every attempt, so splits can select whole units.
+        unit_codes, unit_labels = pd.factorize(ratings._data["unit_id"], sort=False)
         coder_codes, coder_names = pd.factorize(coder_labels, sort=False)
-        self._unit_codes: IntArray = np.asarray(unit_codes, dtype=np.intp)
+        self._attempt_unit_codes: IntArray = np.asarray(unit_codes, dtype=np.intp)
+        self._unit_codes: IntArray = (
+            self._attempt_unit_codes if kept is None else self._attempt_unit_codes[kept]
+        )
         self._unit_labels = np.asarray(unit_labels, dtype=object)
         self._coder_codes: IntArray = np.asarray(coder_codes, dtype=np.intp)
         self._coder_names = np.asarray(coder_names, dtype=object)
@@ -215,6 +274,14 @@ class ReliabilityStudy:
     @property
     def inapplicable_as(self) -> Any:
         return self._inapplicable_as
+
+    @property
+    def trace(self) -> TraceSidecar | None:
+        return self._trace
+
+    @property
+    def retries(self) -> str | None:
+        return self._retries
 
     @property
     def warnings(self) -> tuple[RecordedWarning, ...]:
@@ -298,8 +365,18 @@ class ReliabilityStudy:
         """Alpha under every declared missing-data policy, with diagnostics.
 
         Raises :class:`UndefinedAlphaError` when the reference (``as_missing``)
-        estimate is undefined.
+        estimate is undefined, and :class:`DesignError` when a single-configuration
+        design (repeatability, prompt or order robustness) holds several judge
+        configurations: such a study can only be compared, arm by arm.
         """
+        if len(self._configurations) > 1:
+            keys = SINGLE_CONFIGURATION[self._design]
+            raise DesignError(
+                f"this {self._design.value} study holds {len(self._configurations)} judge "
+                f"configurations ({', '.join(keys)}: {preview(self._configurations)}), and "
+                f"{self._design.value} is measured on one. Compare them with "
+                "study.compare(a=..., b=...), or filter the ratings to one configuration."
+            )
         base = self._value_idx >= 0
         reference = self._compute(self._unit_codes[base], self._value_idx[base], self._values)
         estimates: dict[str, AlphaEstimate] = {}
@@ -347,7 +424,9 @@ class ReliabilityStudy:
             recorded.append(emit(CategorySkewWarning, skew, stacklevel=2))
         notes = list(self._notes)
         if not self._is_error.any() and len(self._policies) > 1:
-            notes.append("There are no failed attempts, so every missing-data policy coincides.")
+            notes.append(
+                "No counted rating is a failed attempt, so every missing-data policy coincides."
+            )
         if self._split is not None:
             manifest, partition = self._split
             notes.append(
@@ -355,6 +434,15 @@ class ReliabilityStudy:
                 f"(fold {manifest.fold} of {manifest.n_folds}, {manifest.splitter_class})."
             )
             notes.extend(self._split_notes)
+        if self._retries is not None:
+            notes.append(
+                f"Retries: {self._n_retried} calls had several attempts; the "
+                f"{'last' if self._retries == 'last' else 'first observed'} attempt is counted."
+            )
+        diagnostics = self._diagnostics(base)
+        findings = [*self._trace_check.confounds, *self._trace_check.notes]
+        for diagnostic in diagnostics.values():
+            findings.extend(n for n in diagnostic.notes if "declared deterministic" in n)
 
         return AlphaResult(
             design=self._design.value,
@@ -369,6 +457,8 @@ class ReliabilityStudy:
             warnings=tuple(recorded),
             notes=tuple(notes),
             provenance=self._provenance(),
+            diagnostics=diagnostics,
+            trace_findings=tuple(findings),
             _sample=StudySample(
                 unit_labels=self._unit_labels,
                 unit_groups=self._unit_groups,
@@ -423,7 +513,7 @@ class ReliabilityStudy:
                 f"{len(only_a)} units appear only in a {preview(only_a)} and {len(only_b)} only "
                 f"in b {preview(only_b)}. Filter the ratings to the shared units first."
             )
-        return compare_arms(
+        result = compare_arms(
             arm_a.alpha(),
             arm_b.alpha(),
             a=dict(a),
@@ -434,6 +524,29 @@ class ReliabilityStudy:
             strata=strata,
             method=method,
             random_state=random_state,
+        )
+        # What changed between the arms: the model (from the ratings) and, when a
+        # trace is given, the recorded configuration fields.
+        diff: dict[str, dict[str, list[Any]]] = {}
+        models_a, models_b = arm_a._models(), arm_b._models()
+        if models_a != models_b:
+            diff["model_id"] = {"a": models_a, "b": models_b}
+        notes = list(result.notes)
+        if self._trace is None:
+            notes.append(
+                "No trace sidecar: changes in prompt, parser or generation settings between "
+                "a and b are not recorded."
+            )
+        else:
+            diff.update(configuration_diff(self._trace, arm_a._conditions(), arm_b._conditions()))
+        if diff:
+            notes.append(f"The configurations differ in {', '.join(diff)}.")
+        elif self._trace is not None:
+            notes.append("The trace records no difference between the configurations.")
+        return dataclasses.replace(
+            result,
+            configuration_diff=diff if diff or self._trace is not None else None,
+            notes=tuple(notes),
         )
 
     # -- internals ----------------------------------------------------------------
@@ -481,10 +594,51 @@ class ReliabilityStudy:
                 missing_policies=self._policies,  # type: ignore[arg-type]
                 abstain_as=self._abstain_as,
                 inapplicable_as=self._inapplicable_as,
+                trace=self._trace,
+                retries=self._retries,
             )
         derived._split = split
         derived._split_notes = split_notes
         return derived
+
+    def _conditions(self) -> list[Any]:
+        """The LLM configurations (condition ids) this study's counted ratings use."""
+        return [c for c in pd.unique(self._condition_ids) if not pd.isna(c)]
+
+    def _models(self) -> list[Any]:
+        """The model ids of this study's LLM rows, sorted by their text."""
+        models = self._ratings._data["model_id"]
+        return sorted((_plain(m) for m in pd.unique(models[models.notna()])), key=str)
+
+    def _diagnostics(self, base: npt.NDArray[np.bool_]) -> dict[str, Diagnostic]:
+        """Design-specific evidence, computed on the counted, pairable ratings."""
+        coded = CodedRatings.build(
+            self._unit_codes[base],
+            self._coder_codes[base],
+            self._value_idx[base],
+            self._unit_labels,
+            self._coder_names,
+            self._values,
+        )
+        diagnostics = {"coder_agreement": coder_agreement(coded)}
+        if self._design is Design.REPEATABILITY:
+            conditions = self._conditions()
+            deterministic = (
+                self._trace.value(conditions[0], "deterministic")
+                if self._trace is not None and conditions
+                else None
+            )
+            diagnostics["run_agreement"] = run_agreement(coded, deterministic)
+        elif self._design is Design.ORDER_ROBUSTNESS and self._trace is not None:
+            condition_of_coder = dict(
+                zip(self._coder_names[self._coder_codes], self._condition_ids, strict=True)
+            )
+            orders = {
+                coder: self._trace.value(condition, "candidate_order")
+                for coder, condition in condition_of_coder.items()
+            }
+            diagnostics["order_swap"] = order_swap(coded, orders)
+        return diagnostics
 
     def _layout(self) -> UnitLayout:
         return UnitLayout(
@@ -504,7 +658,8 @@ class ReliabilityStudy:
         if part_of_unit is None:
             where = manifest.partition_of()
             part_of_unit = np.array([where[_plain(u)] for u in self._unit_labels], dtype=object)
-        part_of_row = part_of_unit[self._unit_codes]
+        # Masks run over every attempt row, so a unit's retries stay together.
+        part_of_row = part_of_unit[self._attempt_unit_codes]
         studies = []
         for name in ("dev", TEST):
             mask = part_of_row == name
@@ -530,10 +685,7 @@ class ReliabilityStudy:
                     "model_family is missing for some LLM rows, so coder independence "
                     "cannot be fully checked."
                 )
-            gaps.append(
-                "No trace sidecar: provider, prompt hash, temperature and parser version "
-                "are not recorded (the sidecar arrives with the LLM workflows)."
-            )
+        gaps.extend(self._trace_check.gaps)
         split = None
         if self._split is not None:
             manifest, partition = self._split
@@ -566,9 +718,11 @@ class ReliabilityStudy:
                 "missing_policies": list(self._policies),
                 "abstain_as": self._abstain_as,
                 "inapplicable_as": self._inapplicable_as,
+                "retries": self._retries,
             },
             split=split,
             gaps=tuple(gaps),
+            trace=None if self._trace is None else self._trace.to_dict(self._conditions()),
         )
 
     def _code_values(self, data: pd.DataFrame) -> IntArray:
@@ -690,6 +844,18 @@ class ReliabilityStudy:
         per_coder["error_rate"] = (
             table[Status.PARSE_ERROR.value] + table[Status.PROVIDER_ERROR.value]
         ) / per_coder["ratings"]
+        # Attempt-level counts, before retries are resolved.
+        attempts = pd.DataFrame(
+            {
+                "coder": self._attempt_coders,
+                "error": pd.Series(self._attempt_status).isin(ERROR_STATUSES).to_numpy(),
+            }
+        ).groupby("coder", sort=False)["error"]
+        per_coder["attempts"] = attempts.size().reindex(per_coder.index).astype(int)
+        per_coder["retries"] = per_coder["attempts"] - per_coder["ratings"]
+        per_coder["attempt_error_rate"] = (
+            attempts.sum().reindex(per_coder.index) / per_coder["attempts"]
+        )
         n_observed = int(table[Status.OBSERVED.value].sum())
         n_coders = len(self._coder_names)
         return Coverage(
@@ -701,6 +867,50 @@ class ReliabilityStudy:
             status_counts={s: int(table[s].sum()) for s in statuses},
             per_coder=per_coder,
         )
+
+
+#: Fields that identify one call to a judge; attempts of the same call are retries.
+CALL_FIELDS: tuple[str, ...] = ("unit_id", "rater_id", "model_id", "condition_id", "run_id")
+
+
+def _resolve_retries(
+    ratings: RatingFrame, coder_labels: npt.NDArray[np.object_], retries: str | None
+) -> tuple[npt.NDArray[np.bool_] | None, int]:
+    """Which rows count under the retries declaration, and how many calls were retried.
+
+    Attempts are grouped by call (unit, rater, model, condition and run), so
+    repeated runs are never mistaken for retries. Returns ``(None, 0)`` when no
+    declaration was made; duplicate rows are then refused by the design check.
+    """
+    if retries is None:
+        return None, 0
+    if "attempt" not in ratings.declared:
+        raise DesignError(
+            "retries= needs an attempt column: RatingFrame.from_long(..., attempt=...)"
+        )
+    data = ratings._data
+    calls = [f for f in CALL_FIELDS if f in ratings.declared or f == "unit_id"]
+    frame = pd.DataFrame({f: data[f].map(str).to_numpy() for f in calls})
+    frame["coder"] = coder_labels
+    frame["attempt"] = data["attempt"].to_numpy(dtype=float)
+    frame["observed"] = (data["status"] == Status.OBSERVED.value).to_numpy()
+    frame["row"] = np.arange(len(frame))
+    keys = [*calls, "coder"]
+    repeated = frame.duplicated([*keys, "attempt"], keep=False)
+    if repeated.any():
+        raise DesignError(
+            f"{int(repeated.sum())} rows repeat an attempt number of the same call "
+            f"{preview(data.index[repeated.to_numpy()])}"
+        )
+    ordered = frame.sort_values("attempt", kind="stable")
+    grouped = ordered.groupby(keys, sort=False)
+    chosen = grouped["row"].last()
+    if retries == "first_observed":
+        first_observed = ordered[ordered["observed"]].groupby(keys, sort=False)["row"].first()
+        chosen = first_observed.combine_first(chosen)
+    kept = np.zeros(len(frame), dtype=bool)
+    kept[chosen.to_numpy(dtype=np.intp)] = True
+    return kept, int((grouped.size() > 1).sum())
 
 
 def _skew_message(estimate: AlphaEstimate) -> str | None:

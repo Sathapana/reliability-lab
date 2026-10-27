@@ -39,6 +39,7 @@ FIELDS: tuple[str, ...] = (
     "model_family",
     "condition_id",
     "run_id",
+    "attempt",
 )
 
 
@@ -118,13 +119,15 @@ class RatingFrame:
         model_family: Hashable | None = None,
         condition_id: Hashable | None = None,
         run_id: Hashable | None = None,
+        attempt: Hashable | None = None,
     ) -> RatingFrame:
         """Validate a long-form table and map its columns to canonical fields.
 
         Each keyword names the column of ``df`` that holds that field. ``unit``,
         ``rater`` and ``value`` are required. Without ``status`` every row must
         carry a value and is recorded as observed. Pass a status column whenever
-        abstentions or failed attempts exist.
+        abstentions or failed attempts exist. ``attempt`` numbers the retries of
+        one call (1, 2, ...); a study then declares which attempt counts.
         """
         if not isinstance(df, pd.DataFrame):
             raise TypeError(f"expected a pandas DataFrame, got {type(df).__name__}")
@@ -139,6 +142,7 @@ class RatingFrame:
             "model_family": model_family,
             "condition_id": condition_id,
             "run_id": run_id,
+            "attempt": attempt,
         }
         absent = [c for c in mapping.values() if c is not None and c not in df.columns]
         if absent:
@@ -178,6 +182,16 @@ class RatingFrame:
             if field in declared:
                 _require_complete(data, field, mapping[field])
                 _require_constant_within(data, field, "unit_id")
+        if "attempt" in declared:
+            _require_complete(data, "attempt", attempt)
+            numeric = pd.to_numeric(data["attempt"], errors="coerce")
+            bad = data.index[numeric.isna()]
+            if len(bad):
+                raise SchemaError(
+                    f"attempt (column {attempt!r}) must be numeric; {len(bad)} rows are not "
+                    f"{preview(bad)}"
+                )
+            data["attempt"] = numeric
 
         is_llm = data["model_id"].notna()
         if is_llm.any():

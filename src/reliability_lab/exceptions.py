@@ -37,6 +37,11 @@ class DomainSizeWarning(ReliabilityWarning):
     """The value domain is large enough to make V x V matrices costly."""
 
 
+class TraceWarning(ReliabilityWarning):
+    """The trace sidecar shows a confound: configurations differ in more than the
+    design compares (for example temperature as well as the prompt)."""
+
+
 class BootstrapWarning(ReliabilityWarning):
     """An interval needs care: failed replicates, a resampling level that ignores
     declared groups, or an experimental method."""

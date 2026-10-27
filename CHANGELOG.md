@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.1.0
+
+LLM judge workflows.
+
+- `TraceSidecar`: one row per judge configuration (`condition_id`). It records provider, prompt hash, rubric and parser versions, temperature, seed, determinism, candidate order, request time and retry policy.
+- Each study checks its trace against its design. Configurations that differ in more than the design compares raise a `TraceWarning`; missing conditions or fields become provenance gaps. Comparisons report the model and trace fields that changed between the arms (`configuration_diff`).
+- The single-configuration designs (repeatability, prompt robustness, order robustness) can hold several judge configurations for `compare()`. Each configuration is checked on its own, and `alpha()` refuses to pool them.
+- `order_robustness` design for pairwise judges whose candidates are shown in swapped orders.
+- Diagnostics on every result (`AlphaResult.diagnostics`):
+  - `coder_agreement` (pairwise exact agreement);
+  - `run_agreement` (repeatability);
+  - `order_swap` (reversal rate, and position bias with a Wilson interval).
+- Retries: a new `attempt` field in `RatingFrame.from_long`. Retried calls must be declared with `retries="last"` or `retries="first_observed"`. Attempts are grouped by call (unit, rater, model, condition, run), so repeated runs are never treated as retries. Coverage reports attempt-level and final error rates.
+- Provenance records the trace rows of the conditions in use and the retries declaration.
+
 ## 0.1.0a1
 
 First public release.

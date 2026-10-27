@@ -14,14 +14,17 @@ from reliability_lab.exceptions import (
     ReliabilityLabError,
     ReliabilityWarning,
     SchemaError,
+    TraceWarning,
     UndefinedAlphaError,
 )
+from reliability_lab.llm import TraceSidecar
 from reliability_lab.report import (
     AlphaEstimate,
     AlphaResult,
     BootstrapResult,
     ComparisonResult,
     Coverage,
+    Diagnostic,
     Interval,
     Provenance,
 )
@@ -44,6 +47,7 @@ __all__ = [
     "Coverage",
     "Design",
     "DesignError",
+    "Diagnostic",
     "Distance",
     "DomainSizeWarning",
     "Fold",
@@ -57,6 +61,8 @@ __all__ = [
     "SchemaError",
     "SplitManifest",
     "Status",
+    "TraceSidecar",
+    "TraceWarning",
     "UndefinedAlphaError",
     "__version__",
 ]
