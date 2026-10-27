@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.1
+
+Bootstrap coverage guidance.
+
 - Bootstrap coverage simulations (`simulations/`):
   - a seeded latent-class data process with difficulty, correlated errors, random or informative failures, and clustered units;
   - true alphas computed from 200,000 units;
