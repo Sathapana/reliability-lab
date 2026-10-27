@@ -258,10 +258,12 @@ class AlphaResult:
         - ``"kalpha"`` follows Krippendorff's KALPHA algorithm: it resamples pairs
           of values and holds D_e at its observed value.
 
-        ``method="bca"`` (units scheme only) is experimental until coverage
-        simulations validate it for alpha. ``alpha_min`` adds the share of
-        replicates below that minimum. All estimates use the same resamples, so
-        their intervals are paired.
+        ``method="bca"`` (units scheme only) gave the most accurate coverage in the
+        simulations of ``docs/guidance/bootstrap-coverage.md``. On small samples
+        dominated by one category it can fail to produce an interval; that is
+        warned about, and ``method="percentile"`` then still gives one.
+        ``alpha_min`` adds the share of replicates below that minimum. All
+        estimates use the same resamples, so their intervals are paired.
         """
         from reliability_lab.inference import bootstrap
 
@@ -440,7 +442,8 @@ class BootstrapResult:
 
     ``level`` is None for the KALPHA scheme, which resamples pairs of values rather
     than units. ``seed`` reproduces the resamples when passed back as
-    ``random_state``.
+    ``random_state``. ``experimental`` marks a method not yet validated by the
+    coverage simulations; no current method is.
     """
 
     scheme: str

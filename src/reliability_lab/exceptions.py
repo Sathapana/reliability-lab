@@ -43,5 +43,5 @@ class TraceWarning(ReliabilityWarning):
 
 
 class BootstrapWarning(ReliabilityWarning):
-    """An interval needs care: failed replicates, a resampling level that ignores
-    declared groups, or an experimental method."""
+    """An interval needs care: failed replicates, a missing interval, or a
+    resampling level that ignores declared groups."""

@@ -68,11 +68,9 @@ def test_replicates_below_minus_one_are_truncated() -> None:
 
 def test_kalpha_does_not_apply_at_perfect_agreement() -> None:
     matrix = {"a": [1, 2, 3, 1], "b": [1, 2, 3, 1]}
-    boot = (
-        human_study(matrix, "nominal", [1, 2, 3])
-        .alpha()
-        .bootstrap(scheme="kalpha", n_resamples=100, random_state=0)
-    )
+    result = human_study(matrix, "nominal", [1, 2, 3]).alpha()
+    with pytest.warns(BootstrapWarning, match="no interval for as_missing"):
+        boot = result.bootstrap(scheme="kalpha", n_resamples=100, random_state=0)
     interval = boot["as_missing"]
     assert "alpha = 1" in (interval.undefined_reason or "")
     assert np.isnan(interval.low)
