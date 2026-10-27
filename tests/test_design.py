@@ -83,11 +83,27 @@ def test_unknown_and_future_designs() -> None:
         ReliabilityStudy(
             human(), measurement="nominal", values=[1, 2], coders="rater_id", design="x"
         )
-    for design in ("human_llm_alignment", "configuration_change", "order_robustness"):
+    for design in ("human_llm_alignment", "configuration_change"):
         with pytest.raises(NotImplementedError):
             ReliabilityStudy(
                 human(), measurement="nominal", values=[1, 2], coders="rater_id", design=design
             )
+    with pytest.raises(NotImplementedError, match=r"study\.compare"):
+        ReliabilityStudy(
+            human(),
+            measurement="nominal",
+            values=[1, 2],
+            coders="rater_id",
+            design="configuration_change",
+        )
+    with pytest.raises(DesignError, match="order_robustness needs LLM rows"):
+        ReliabilityStudy(
+            human(),
+            measurement="nominal",
+            values=[1, 2],
+            coders="rater_id",
+            design="order_robustness",
+        )
 
 
 def test_mixed_human_and_llm_rows_are_refused() -> None:

@@ -88,7 +88,13 @@ def test_provenance_lists_gaps() -> None:
 def test_alpha_tables() -> None:
     result = failing_study().alpha()
     tables = result.tables()
-    assert set(tables) == {"estimates", "per_unit", "coincidence", "coverage"}
+    assert set(tables) == {
+        "estimates",
+        "per_unit",
+        "coincidence",
+        "coverage",
+        "diagnostic_coder_agreement",
+    }
     assert len(tables["estimates"]) == 2
     assert len(tables["per_unit"]) == 2 * 4
     assert list(tables["per_unit"].columns[:2]) == ["estimate", "unit_id"]
@@ -106,6 +112,7 @@ def test_to_parquet_round_trips(tmp_path: Path) -> None:
         "per_unit.parquet",
         "coincidence.parquet",
         "coverage.parquet",
+        "diagnostic_coder_agreement.parquet",
         "result.json",
     }
     estimates = pd.read_parquet(out / "estimates.parquet")

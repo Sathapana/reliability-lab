@@ -1,6 +1,6 @@
 # reliability-lab
 
-**Status: alpha (0.1.0a1).** The API may still change between releases.
+**Status: alpha (0.1.0).** The API may still change between releases.
 
 reliability-lab is a study-design library for measuring the reliability of LLM and human judgments. It is built on Krippendorff's alpha. Alpha implementations already exist in Python. This package adds the workflow around the coefficient:
 
@@ -11,16 +11,17 @@ reliability-lab is a study-design library for measuring the reliability of LLM a
 - bootstrap intervals by a scheme you name: whole units or groups resampled (`scheme="units"`), or Krippendorff's KALPHA algorithm (`scheme="kalpha"`);
 - paired comparisons of two configurations on the same units, with the interval on the difference;
 - group-safe train/test splits that work with any scikit-learn splitter, with a saved manifest that reproduces the split;
-- versioned JSON and Parquet reports with provenance.
+- versioned JSON and Parquet reports with provenance;
+- LLM judge workflows: a trace sidecar of judge configurations, declared retry handling, and evidence specific to each design (run agreement, order swaps and position bias).
 
-LLM-specific workflows (a trace sidecar, repeatability and order-swap checks) are next on the roadmap ([design document](docs/design/framing-v2.md)).
+Mixed human-LLM panels and coverage simulations for the bootstrap schemes are next on the roadmap ([design document](docs/design/framing-v2.md)).
 
 > **Reliability is not validity.** Coders can agree consistently and still be wrong in the same way, for example because of a flawed rubric or a bias they share. When results come from different designs (repeatability, inter-model agreement, human panels), they are reported as different quantities and are never pooled.
 
 ## Install
 
 ```bash
-pip install --pre "reliability-lab[sklearn,parquet]"
+pip install "reliability-lab[sklearn,parquet]"
 ```
 
 The extras are optional. `sklearn` provides the splitters, although any object with a scikit-learn style `split` method works; `parquet` enables `to_parquet`. For development, run `uv sync` and then `uv run pytest`.
@@ -101,6 +102,44 @@ test.manifest.assert_no_leakage(few_shot_units)  # raises LeakageError
 ```
 
 See [`examples/splits.py`](examples/splits.py) for a full run. Releases are described in [docs/releasing.md](docs/releasing.md).
+
+## LLM judge workflows
+
+A `condition_id` names a frozen judge configuration. A trace sidecar records what each configuration was: provider, prompt hash, rubric and parser versions, temperature, seed, and candidate order for pairwise judges. With it, a study checks that its coders differ only in what the design compares. For example, if prompt-robustness conditions also differ in temperature, it raises a `TraceWarning`. Whatever the trace leaves out is listed among the provenance gaps.
+
+```python
+from reliability_lab import TraceSidecar
+
+trace = TraceSidecar.from_frame(
+    configs,
+    condition="condition_id",
+    prompt_hash="prompt_sha",
+    temperature="temperature",
+    candidate_order="order",  # "A,B" / "B,A"
+)
+study = ReliabilityStudy(
+    ratings,  # RatingFrame.from_long(..., attempt="attempt")
+    measurement="nominal",
+    values=["A", "tie", "B"],  # labels name the winning candidate, not its position
+    coders="condition_id",
+    design="order_robustness",
+    trace=trace,
+    retries="last",  # required when calls were retried
+)
+result = study.alpha()
+result.diagnostics["order_swap"].values  # reversal rate, P(first shown wins) with a Wilson interval
+result.trace_findings  # confounds and caveats from the trace
+```
+
+| Design | Coders are | Evidence beside alpha |
+| --- | --- | --- |
+| `repeatability` | repeated runs of one configuration (`run_id`) | run agreement: units where every run agrees |
+| `prompt_robustness` | prompt conditions of one model | pairwise agreement between conditions |
+| `inter_model` | different models | pairwise agreement; family and configuration checks |
+| `order_robustness` | candidate orders of one pairwise judge | reversal rate and position bias |
+| configuration change | two configurations, via `study.compare(a=..., b=...)` | paired interval on the difference; the trace fields that changed |
+
+Retried calls are never resolved silently. Number the attempts with an `attempt` column, then declare `retries="last"` or `retries="first_observed"`. Coverage then reports error rates both per attempt and for the attempts that count. See [`examples/llm_judge.py`](examples/llm_judge.py).
 
 ## Licence
 

@@ -40,7 +40,14 @@ class Design(StrEnum):
 #: Fields a CoderSpec may combine.
 CODER_FIELDS: tuple[str, ...] = ("rater_id", "model_id", "model_family", "condition_id", "run_id")
 
-LLM_DESIGNS = frozenset({Design.REPEATABILITY, Design.PROMPT_ROBUSTNESS, Design.INTER_MODEL})
+LLM_DESIGNS = frozenset(
+    {
+        Design.REPEATABILITY,
+        Design.PROMPT_ROBUSTNESS,
+        Design.INTER_MODEL,
+        Design.ORDER_ROBUSTNESS,
+    }
+)
 
 #: What each implemented design measures, attached to every result.
 DESIGN_NOTES: dict[Design, str] = {
@@ -59,6 +66,11 @@ DESIGN_NOTES: dict[Design, str] = {
         "Agreement among different models. It is not agreement with human experts or "
         "with ground truth."
     ),
+    Design.ORDER_ROBUSTNESS: (
+        "Agreement of one judge with itself when the candidates' presentation order is "
+        "swapped. It applies to pairwise judgments whose labels name the winning candidate, "
+        "not its position."
+    ),
 }
 
 _NOT_YET: dict[Design, str] = {
@@ -67,7 +79,6 @@ _NOT_YET: dict[Design, str] = {
         "configuration_change is a paired comparison, not a single-alpha design: declare the "
         "design each configuration is measured under and call study.compare(a=..., b=...)"
     ),
-    Design.ORDER_ROBUSTNESS: "order_robustness arrives with the LLM workflows in phase 4",
 }
 
 
@@ -182,6 +193,18 @@ def check_design(
             )
         if data["model_id"].nunique() < 2:
             raise DesignError("inter_model needs at least two distinct model_id values")
+    elif design is Design.ORDER_ROBUSTNESS:
+        models = pd.unique(data["model_id"])
+        if len(models) > 1:
+            raise DesignError(
+                f"order_robustness swaps candidate order for one judge; found {len(models)} "
+                f"models {preview(models)}"
+            )
+        if "condition_id" not in coders.by:
+            raise DesignError(
+                "order_robustness coders are candidate-order conditions: include "
+                "'condition_id' in CoderSpec(by=...)"
+            )
 
     coders_present = pd.unique(coder_labels)
     if len(coders_present) < 2:
@@ -249,5 +272,7 @@ def _require_one_rating_per_coder(
         pairs = list(zip(duplicated["unit"], duplicated["coder"], strict=True))
         raise DesignError(
             f"{len(pairs)} (unit, coder) pairs have more than one row {preview(pairs)}. Each "
-            "coder may rate a unit once; repeated runs need run_id in the CoderSpec."
+            "coder may rate a unit once: for retried calls, map an attempt column and declare "
+            "retries='last' or retries='first_observed'; for repeated runs, add run_id to the "
+            "CoderSpec."
         )
