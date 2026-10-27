@@ -1,0 +1,65 @@
+name: Release
+
+# Publishes on a version tag (v0.1.0a1, v0.1.0, ...) with PyPI trusted publishing:
+# no API tokens are stored. See docs/releasing.md for the one-time setup.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    name: Build and check the distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - name: Check the tag matches the package version
+        run: |
+          version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/reliability_lab/_version.py)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package version $version" >&2
+            exit 1
+          fi
+      - name: Build
+        run: uv build
+      - name: Check metadata
+        run: uvx twine check --strict dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/reliability-lab
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: publish-testpypi
+    runs-on: ubuntu-latest
+    # Give this environment a required reviewer to approve each release by hand.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/reliability-lab
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

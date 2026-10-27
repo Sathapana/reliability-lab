@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: uv sync --all-groups --locked
+      - name: Lint
+        run: uv run ruff check
+      - name: Format
+        run: uv run ruff format --check
+      - name: Type-check
+        run: uv run mypy
+      - name: Test
+        run: uv run pytest
+
+  # irrCAC pins scipy==1.12.0, below this package's floor (1.15, for the bootstrap's
+  # rng keyword). Its parity test only needs the point estimates, so it runs in a
+  # throwaway environment with the package installed without its dependencies.
+  parity-irrcac:
+    name: irrCAC parity (isolated)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - name: Build the isolated environment
+        run: |
+          uv venv .venv-irrcac --python 3.12
+          uv pip install --python .venv-irrcac irrcac pytest hypothesis
+          uv pip install --python .venv-irrcac --no-deps .
+      - name: Run irrCAC parity
+        run: >-
+          .venv-irrcac/bin/python -m pytest tests/test_parity.py -m parity -k irrcac
+          -p no:cacheprovider
