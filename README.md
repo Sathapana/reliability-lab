@@ -15,7 +15,7 @@ reliability-lab is a study-design library for measuring the reliability of LLM a
 - versioned JSON and Parquet reports with provenance;
 - LLM judge workflows: a trace sidecar of judge configurations, declared retry handling, and evidence specific to each design (run agreement, order swaps and position bias).
 
-Mixed human-LLM panels are next on the roadmap ([design document](docs/design/framing-v2.md)).
+Mixed human-LLM panels are next on the roadmap ([design document](https://github.com/Sathapana/reliability-lab/blob/main/docs/design/framing-v2.md)).
 
 > **Reliability is not validity.** Coders can agree consistently and still be wrong in the same way, for example because of a flawed rubric or a bias they share. When results come from different designs (repeatability, inter-model agreement, human panels), they are reported as different quantities and are never pooled.
 
@@ -81,7 +81,7 @@ print(jk.summary())  # interval, standard error, and the most influential coders
 
 When coders are resampled, the copies of one coder are never paired with each other, since a coder always agrees with itself. These schemes need at least 3 coders and give percentile intervals.
 
-Which scheme to trust, and when, is measured by simulation in the [bootstrap coverage guidance](docs/guidance/bootstrap-coverage.md).
+Which scheme to trust, and when, is measured by simulation in the [bootstrap coverage guidance](https://github.com/Sathapana/reliability-lab/blob/main/docs/guidance/bootstrap-coverage.md).
 
 To compare two configurations of a judge, for example two prompts, select each one's rows. Both must cover the same units. Every replicate resamples the same units for both, and the interval is on the difference:
 
@@ -120,7 +120,7 @@ dev2, test2 = later_study.apply_manifest("split.json")  # same units, new judge 
 test.manifest.assert_no_leakage(few_shot_units)  # raises LeakageError
 ```
 
-See [`examples/splits.py`](examples/splits.py) for a full run. Releases are described in [docs/releasing.md](docs/releasing.md).
+See [`examples/splits.py`](https://github.com/Sathapana/reliability-lab/blob/main/examples/splits.py) for a full run. Releases are described in [docs/releasing.md](https://github.com/Sathapana/reliability-lab/blob/main/docs/releasing.md).
 
 ## LLM judge workflows
 
@@ -160,7 +160,7 @@ result.trace_findings  # confounds and caveats from the trace
 
 The single-configuration designs (repeatability, prompt robustness, order robustness) can hold several configurations to compare, such as an old and a new judge. Each configuration is checked on its own. `alpha()` refuses to pool them; `study.compare(a={"condition_id": "old"}, b={"condition_id": "new"})` reports each one's alpha and diagnostics, with a paired interval on the difference.
 
-Retried calls are never resolved silently. Number the attempts with an `attempt` column, then declare `retries="last"` or `retries="first_observed"`. Coverage then reports error rates both per attempt and for the attempts that count. See [`examples/llm_judge.py`](examples/llm_judge.py).
+Retried calls are never resolved silently. Number the attempts with an `attempt` column, then declare `retries="last"` or `retries="first_observed"`. Coverage then reports error rates both per attempt and for the attempts that count. See [`examples/llm_judge.py`](https://github.com/Sathapana/reliability-lab/blob/main/examples/llm_judge.py).
 
 ## Licence
 
