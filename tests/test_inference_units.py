@@ -216,7 +216,7 @@ def test_report_names_scheme_and_serialises() -> None:
     result = human_study(F4["matrix"], "ordinal", F4["values"]).alpha()
     boot = result.bootstrap(scheme="units", n_resamples=100, random_state=4)
     text = boot.summary()
-    assert "scheme units (resampling 12 units)" in text
+    assert "scheme units (resampling 12 units; coders fixed)" in text
     assert "method percentile" in text
     assert "seed 4" in text
     payload = json.loads(json.dumps(boot.to_dict(), allow_nan=False))

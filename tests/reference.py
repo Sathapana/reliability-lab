@@ -40,6 +40,13 @@ def reference_components(
             continue
         for a, b in permutations(unit, 2):
             o[(a, b)] += 1 / (m - 1)
+    return components_from_coincidences(o, level, values)
+
+
+def components_from_coincidences(
+    o: Counter[tuple[Any, Any]], level: str, values: Sequence[Any]
+) -> ReferenceComponents:
+    """n, D_o, D_e and the squared distance from coincidences {(c, k): weight}."""
     n_c: Counter[Any] = Counter()
     for (a, _), w in o.items():
         n_c[a] += w

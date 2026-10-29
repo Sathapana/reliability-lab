@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+Generalising over coders.
+
+- Two new bootstrap schemes:
+  - `scheme="coders"` resamples coders and holds the units fixed;
+  - `scheme="two_way"` resamples units (or groups, within strata) and coders independently.
+- When coders are resampled, the copies of one coder are never paired with each other, so a duplicated coder does not agree with itself. With no coder drawn twice, the coincidences are Krippendorff's.
+- Both schemes need at least 3 coders, give percentile intervals only (BCa raises a `DesignError`), and are not available in `compare()`.
+- `AlphaResult.coder_jackknife()` gives a `JackknifeResult`:
+  - alpha without each coder, and each coder's influence;
+  - jackknife standard errors;
+  - t intervals with m − 1 degrees of freedom;
+  - the same JSON and Parquet reports as the other results.
+- Every bootstrap result says which dimension it generalises over: `describe()` names what was resampled ("coders fixed" for the units scheme), and a note states the claim. `BootstrapResult.n_coders` records the number of coders resampled.
+- Coverage simulations with coders who differ (`python -m simulations.run_coverage --grid coders`). Each scheme is scored against the claim it is built for: the same coders on new questions, the same questions with new coders, or both new. The guidance gains a section on generalising over coders.
+
 ## 0.1.1
 
 Bootstrap coverage guidance.

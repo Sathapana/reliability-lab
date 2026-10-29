@@ -1,12 +1,13 @@
 """Run the coverage grid in parallel and write the results.
 
-    uv run python -m simulations.run_coverage                # full grid
+    uv run python -m simulations.run_coverage                # full P5 grid
+    uv run python -m simulations.run_coverage --grid coders  # coders that differ
     uv run python -m simulations.run_coverage --quick        # 50 replications, a smoke run
     uv run python -m simulations.run_coverage --cells clustered --n-sim 500
 
 Writes ``coverage.csv`` (one row per scenario and scheme) and ``run_info.json``
-to the output directory, plus ``replications.parquet`` (one row per replication
-and scheme; not committed).
+to the output directory (``results/`` or ``results/coders/``), plus
+``replications.parquet`` (one row per replication and scheme; not committed).
 """
 
 from __future__ import annotations
@@ -26,25 +27,43 @@ import pandas as pd
 import scipy
 
 import reliability_lab
-from simulations.coverage import CellResult, Scenario, run_replications, true_alpha
-from simulations.grid import scenarios
+from simulations import coders, coverage, grid
 
 DEFAULT_SEED = 20261027
 RESULTS = Path(__file__).parent / "results"
+#: Per grid: scenarios, truth, replications, cell result, and output directory.
+GRIDS: dict[str, tuple[Any, Any, Any, Any, Path]] = {
+    "base": (
+        grid.scenarios,
+        coverage.true_alpha,
+        coverage.run_replications,
+        coverage.CellResult,
+        RESULTS,
+    ),
+    "coders": (
+        coders.scenarios,
+        coders.both_random_truth,
+        coders.run_replications,
+        coders.CoderCellResult,
+        RESULTS / "coders",
+    ),
+}
 
 
-def _truth(args: tuple[Scenario, int, int]) -> dict[str, float]:
-    s, seed, index = args
-    return true_alpha(s, seed=seed * 1000 + index)
+def _truth(args: tuple[str, Any, int, int]) -> dict[str, float]:
+    name, s, seed, index = args
+    truth = GRIDS[name][1]
+    return truth(s, seed=seed * 1000 + index)  # type: ignore[no-any-return]
 
 
-def _chunk(args: tuple[Scenario, dict[str, float], range, int, int, int]) -> pd.DataFrame:
-    s, truth, reps, n_resamples, seed, index = args
-    return run_replications(s, truth, reps, n_resamples, seed, index)
+def _chunk(args: tuple[str, Any, dict[str, float], range, int, int, int]) -> pd.DataFrame:
+    name, s, truth, reps, n_resamples, seed, index = args
+    return GRIDS[name][2](s, truth, reps, n_resamples, seed, index)  # type: ignore[no-any-return]
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--grid", choices=sorted(GRIDS), default="base")
     parser.add_argument("--n-sim", type=int, default=2000, help="replications per scenario")
     parser.add_argument("--n-resamples", type=int, default=2000, help="bootstrap resamples")
     parser.add_argument("--workers", type=int, default=os.cpu_count() or 1)
@@ -56,7 +75,8 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if args.quick:
         args.n_sim, args.n_resamples = 50, 500
-    out = args.out or (RESULTS / "quick" if args.quick else RESULTS)
+    scenarios, _, _, cell_result, results = GRIDS[args.grid]
+    out = args.out or (results / "quick" if args.quick else results)
     out.mkdir(parents=True, exist_ok=True)
 
     indexed = [(i, s) for i, s in enumerate(scenarios()) if args.cells in s.cell]
@@ -68,14 +88,14 @@ def main(argv: list[str] | None = None) -> None:
         truths = dict(
             zip(
                 [i for i, _ in indexed],
-                pool.map(_truth, [(s, args.seed, i) for i, s in indexed]),
+                pool.map(_truth, [(args.grid, s, args.seed, i) for i, s in indexed]),
                 strict=True,
             )
         )
         print(f"truths done in {time.perf_counter() - started:.0f}s", flush=True)
         tasks = [
-            (s, truths[i], range(start, min(start + args.chunk, args.n_sim)), args.n_resamples,
-             args.seed, i)
+            (args.grid, s, truths[i], range(start, min(start + args.chunk, args.n_sim)),
+             args.n_resamples, args.seed, i)
             for i, s in indexed
             for start in range(0, args.n_sim, args.chunk)
         ]  # fmt: skip
@@ -90,7 +110,7 @@ def main(argv: list[str] | None = None) -> None:
     records = pd.concat(parts, ignore_index=True)
     summary = pd.concat(
         [
-            CellResult(s, truths[i], records[records["cell"] == s.cell]).summary()
+            cell_result(s, truths[i], records[records["cell"] == s.cell]).summary()
             for i, s in indexed
         ],
         ignore_index=True,
@@ -98,6 +118,7 @@ def main(argv: list[str] | None = None) -> None:
     summary.to_csv(out / "coverage.csv", index=False, float_format="%.6g")
     records.to_parquet(out / "replications.parquet", index=False)
     info: dict[str, Any] = {
+        "grid": args.grid,
         "seed": args.seed,
         "n_sim": args.n_sim,
         "n_resamples": args.n_resamples,

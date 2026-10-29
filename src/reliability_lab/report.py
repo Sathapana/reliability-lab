@@ -27,7 +27,7 @@ from reliability_lab.exceptions import ReliabilityLabError, ReliabilityWarning
 if TYPE_CHECKING:
     from reliability_lab.inference import StudySample
 
-Scheme = Literal["units", "kalpha"]
+Scheme = Literal["units", "kalpha", "coders", "two_way"]
 Level = Literal["unit", "group"]
 Method = Literal["percentile", "bca"]
 
@@ -257,6 +257,14 @@ class AlphaResult:
           D_e is recomputed in every replicate.
         - ``"kalpha"`` follows Krippendorff's KALPHA algorithm: it resamples pairs
           of values and holds D_e at its observed value.
+        - ``"coders"`` resamples the coders with the units fixed: the interval
+          speaks for new coders from the same pool, on these units.
+        - ``"two_way"`` resamples units (or groups) and coders independently: the
+          interval speaks for new coders on new units.
+
+        The units scheme holds the coders fixed, so its interval speaks only for
+        these coders. Coder resampling needs at least 3 coders, and copies of a
+        coder drawn twice are never paired with each other.
 
         ``method="bca"`` (units scheme only) gave the most accurate coverage in the
         simulations of ``docs/guidance/bootstrap-coverage.md``. On small samples
@@ -284,6 +292,23 @@ class AlphaResult:
             alpha_min=alpha_min,
             random_state=random_state,
         )
+
+    def coder_jackknife(self, *, confidence: float = 0.95) -> JackknifeResult:
+        """Alpha without each coder in turn: a standard error, a t interval, and influence.
+
+        The jackknife measures how much alpha depends on which coders were sampled,
+        with the units held fixed. Its ``influence`` table shows, for each coder,
+        alpha without that coder and how much the coder moves alpha, a quick way to
+        find a coder who disagrees with the rest. Needs at least 3 coders.
+        """
+        from reliability_lab.inference import coder_jackknife
+
+        if self._sample is None:
+            raise ReliabilityLabError(
+                "this result has no data attached; use a result returned by "
+                "ReliabilityStudy.alpha()"
+            )
+        return coder_jackknife(self, self._sample, confidence=confidence)
 
     def to_frame(self) -> pd.DataFrame:
         """One row per estimate."""
@@ -462,6 +487,7 @@ class BootstrapResult:
     warnings: tuple[RecordedWarning, ...]
     notes: tuple[str, ...]
     provenance: Provenance | None = None
+    n_coders: int | None = None
 
     def __getitem__(self, name: str) -> Interval:
         return self.intervals[name]
@@ -484,12 +510,19 @@ class BootstrapResult:
         return _write_parquet(self.tables(), self.to_dict(), directory)
 
     def describe(self) -> str:
-        """One line naming the scheme, method, level and seed."""
+        """One line naming the scheme, what it resamples, method and seed."""
+        within = " within strata" if self.strata else ""
         if self.scheme == "kalpha":
             how = "scheme kalpha (pairs of values, D_e fixed)"
+        elif self.scheme == "coders":
+            how = f"scheme coders (resampling {self.n_coders} coders; units fixed)"
+        elif self.scheme == "two_way":
+            how = (
+                f"scheme two_way (resampling {self.n_clusters} {self.level}s{within} "
+                f"and {self.n_coders} coders)"
+            )
         else:
-            within = " within strata" if self.strata else ""
-            how = f"scheme units (resampling {self.n_clusters} {self.level}s{within})"
+            how = f"scheme units (resampling {self.n_clusters} {self.level}s{within}; coders fixed)"
         flag = " [experimental]" if self.experimental else ""
         return (
             f"{how} | method {self.method}{flag} | {self.confidence:.0%} | "
@@ -512,6 +545,7 @@ class BootstrapResult:
             "seed": self.seed,
             "alpha_min": self.alpha_min,
             "n_clusters": self.n_clusters,
+            "n_coders": self.n_coders,
         }
 
     def to_dict(self, include_distribution: bool = False) -> dict[str, Any]:
@@ -668,6 +702,98 @@ class ComparisonResult:
                 f"{_fmt(d.point):>9}{_fmt(d.low):>9}{_fmt(d.high):>9}{d.n_failed:>8}"
             )
         lines.extend(_interval_footnotes(self.differences.values()))
+        _append_warnings_and_notes(lines, self.warnings, self.notes)
+        return "\n".join(lines)
+
+
+@dataclass(frozen=True, eq=False)
+class JackknifeResult:
+    """Leave-one-coder-out jackknife for every estimate of one study.
+
+    Each interval's ``distribution`` holds alpha without each coder in turn, and
+    ``standard_errors`` the jackknife standard errors. ``influence`` has one row per
+    estimate and coder: ``alpha_without`` and ``influence`` (alpha minus alpha
+    without the coder) plus the units the coder rated.
+    """
+
+    confidence: float
+    n_coders: int
+    design: str
+    measurement: str
+    intervals: Mapping[str, Interval]
+    standard_errors: Mapping[str, float]
+    influence: pd.DataFrame
+    warnings: tuple[RecordedWarning, ...]
+    notes: tuple[str, ...]
+    provenance: Provenance | None = None
+
+    def __getitem__(self, name: str) -> Interval:
+        return self.intervals[name]
+
+    def to_frame(self) -> pd.DataFrame:
+        """One row per estimate, with its jackknife standard error."""
+        rows = []
+        for name, interval in self.intervals.items():
+            row = interval.summary_row()
+            row["standard_error"] = self.standard_errors[name]
+            rows.append(row)
+        return pd.DataFrame(rows)
+
+    def tables(self) -> dict[str, pd.DataFrame]:
+        """Tidy tables: ``intervals`` and ``influence``."""
+        return {"intervals": self.to_frame(), "influence": self.influence}
+
+    def to_dict(self) -> dict[str, Any]:
+        return _jsonable(  # type: ignore[no-any-return]
+            {
+                **_header("jackknife-result"),
+                "provenance": None if self.provenance is None else self.provenance.to_dict(),
+                "design": self.design,
+                "measurement": self.measurement,
+                "confidence": self.confidence,
+                "n_coders": self.n_coders,
+                "intervals": {
+                    k: {**i.to_dict(), "standard_error": self.standard_errors[k]}
+                    for k, i in self.intervals.items()
+                },
+                "influence": self.influence.to_dict(orient="records"),
+                "warnings": _warning_dicts(self.warnings),
+                "notes": list(self.notes),
+            }
+        )
+
+    def to_json(self, path: str | os.PathLike[str] | None = None) -> str:
+        """Strict JSON of :meth:`to_dict`, written as UTF-8 when ``path`` is given."""
+        return _write_json(self.to_dict(), path)
+
+    def to_parquet(self, directory: str | os.PathLike[str]) -> Path:
+        """Write each of :meth:`tables` as Parquet, plus ``result.json`` (needs pyarrow)."""
+        return _write_parquet(self.tables(), self.to_dict(), directory)
+
+    def summary(self) -> str:
+        lines = [
+            f"Coder jackknife | design: {self.design} | measurement: {self.measurement}",
+            f"leave one of {self.n_coders} coders out | t interval | {self.confidence:.0%}",
+            "",
+            f"{'estimate':<26}{'alpha':>8}{'low':>9}{'high':>9}{'SE':>9}",
+        ]
+        for name, i in self.intervals.items():
+            lines.append(
+                f"{name:<26}{_fmt(i.point):>8}{_fmt(i.low):>9}{_fmt(i.high):>9}"
+                f"{_fmt(self.standard_errors[name]):>9}"
+            )
+        lines.extend(_interval_footnotes(self.intervals.values()))
+        first = next(iter(self.intervals), None)
+        if first is not None:
+            table = self.influence[self.influence["estimate"] == first]
+            ranked = table.reindex(table["influence"].abs().sort_values(ascending=False).index)
+            lines += ["", f"Influence on {first} (alpha minus alpha without the coder)"]
+            for coder, influence, without in (
+                ranked[["coder", "influence", "alpha_without"]].head(5).itertuples(index=False)
+            ):
+                lines.append(
+                    f"  {coder!s:<24}{_fmt(float(influence)):>8}  without: {_fmt(float(without))}"
+                )
         _append_warnings_and_notes(lines, self.warnings, self.notes)
         return "\n".join(lines)
 

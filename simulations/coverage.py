@@ -90,10 +90,39 @@ class Simulated:
     complete: np.ndarray
     cluster: np.ndarray
     hard: np.ndarray
+    truth: np.ndarray
 
 
-def simulate(s: Scenario, n_units: int, rng: np.random.Generator) -> Simulated:
-    m, n_values = s.n_coders, len(s.values)
+@dataclass(frozen=True)
+class CoderPanel:
+    """Persistent traits of coders, so coders can differ from one another.
+
+    ``accuracy`` and ``favourite`` have one entry per coder, or per unit and slot
+    when every unit is rated by its own draw of coders. When a coder guesses, with
+    probability ``tilt`` the guess goes to the coder's favourite: a category
+    (nominal), or a lean of -1 or +1 scale points (ordinal).
+    """
+
+    accuracy: np.ndarray
+    favourite: np.ndarray
+    tilt: float
+
+
+def draw_panel(s: Scenario, n_coders: int, spread: float, rng: np.random.Generator) -> CoderPanel:
+    """Coders from a pool whose accuracies spread around the scenario's by ``spread``."""
+    accuracy = np.clip(s.accuracy + spread * rng.standard_normal(n_coders), 0.05, 1.0)
+    if s.measurement == "nominal":
+        favourite = rng.integers(len(s.values), size=n_coders)
+    else:
+        favourite = rng.choice(np.array([-1, 1]), size=n_coders)
+    return CoderPanel(accuracy, favourite, min(0.5, 2 * spread))
+
+
+def simulate(
+    s: Scenario, n_units: int, rng: np.random.Generator, panel: CoderPanel | None = None
+) -> Simulated:
+    """Units from the scenario, rated by identical coders or by ``panel``."""
+    n_values = len(s.values)
     cluster = np.arange(n_units) // s.cluster_size
     n_clusters = int(cluster[-1]) + 1
     hard = (rng.random(n_clusters) < HARD_SHARE)[cluster]
@@ -101,7 +130,27 @@ def simulate(s: Scenario, n_units: int, rng: np.random.Generator) -> Simulated:
     topic = rng.choice(n_values, size=n_clusters, p=prevalence)[cluster]
     own_truth = rng.choice(n_values, size=n_units, p=prevalence)
     truth = np.where(rng.random(n_units) < s.cohesion, topic, own_truth)
-    accuracy = np.where(hard, s.accuracy - HARD_PENALTY, s.accuracy)
+    return rate(s, truth, hard, cluster, rng, panel)
+
+
+def rate(
+    s: Scenario,
+    truth: np.ndarray,
+    hard: np.ndarray,
+    cluster: np.ndarray,
+    rng: np.random.Generator,
+    panel: CoderPanel | None = None,
+) -> Simulated:
+    """Ratings of the given units. Without a panel, the random stream is the one the
+    committed P5 results were drawn from; a panel only adds draws after it."""
+    n_units, n_values = len(truth), len(s.values)
+    if panel is None:
+        m = s.n_coders
+        accuracy = np.where(hard, s.accuracy - HARD_PENALTY, s.accuracy)[:, None]
+    else:
+        m = panel.accuracy.shape[-1]
+        per_coder = np.broadcast_to(panel.accuracy, (n_units, m))
+        accuracy = np.clip(per_coder - HARD_PENALTY * hard[:, None], 0.0, 1.0)
 
     def guesses(size: tuple[int, ...]) -> np.ndarray:
         if s.measurement == "nominal":
@@ -110,7 +159,7 @@ def simulate(s: Scenario, n_units: int, rng: np.random.Generator) -> Simulated:
         base = np.broadcast_to(truth[:, None] if len(size) == 2 else truth, size)
         return np.clip(base + rng.choice(shifts, size=size, p=p), 0, n_values - 1)
 
-    knows = rng.random((n_units, m)) < accuracy[:, None]
+    knows = rng.random((n_units, m)) < accuracy
     own = guesses((n_units, m))
     shared = guesses((n_units,))
     copy = rng.random((n_units, m)) < s.rho
@@ -118,8 +167,16 @@ def simulate(s: Scenario, n_units: int, rng: np.random.Generator) -> Simulated:
 
     easy_rate, hard_rate = FAILURE_RATES[s.failures]
     failed = rng.random((n_units, m)) < np.where(hard, hard_rate, easy_rate)[:, None]
+    if panel is not None and panel.tilt > 0:
+        tilted = ~knows & (rng.random((n_units, m)) < panel.tilt)
+        favourite = np.broadcast_to(panel.favourite, (n_units, m))
+        if s.measurement == "nominal":
+            target = favourite
+        else:
+            target = np.clip(truth[:, None] + favourite, 0, n_values - 1)
+        complete = np.where(tilted, target, complete)
     codes = np.where(failed, -1, complete)
-    return Simulated(codes, complete, cluster, hard)
+    return Simulated(codes, complete, cluster, hard, truth)
 
 
 def alpha_of(codes: np.ndarray, s: Scenario) -> float:

@@ -385,7 +385,10 @@ class ReliabilityStudy:
             if policy == "as_missing":
                 estimates["as_missing"] = self._estimate("as_missing", reference, self._values)
                 inputs["as_missing"] = EstimateInput(
-                    self._unit_codes[base], self._value_idx[base], self._values
+                    self._unit_codes[base],
+                    self._value_idx[base],
+                    self._values,
+                    self._coder_codes[base],
                 )
             elif policy == "as_category":
                 values = (*self._values, ERROR_CATEGORY)
@@ -394,14 +397,16 @@ class ReliabilityStudy:
                 keep = codes >= 0
                 computed = self._compute(self._unit_codes[keep], codes[keep], values)
                 estimates["as_category"] = self._estimate("as_category", computed, values)
-                inputs["as_category"] = EstimateInput(self._unit_codes[keep], codes[keep], values)
+                inputs["as_category"] = EstimateInput(
+                    self._unit_codes[keep], codes[keep], values, self._coder_codes[keep]
+                )
             else:
                 for variant in ("pessimistic", "optimistic"):
                     codes, n_imputed, n_unanchored = self._impute(reference, variant)
                     keep = codes >= 0
                     computed = self._compute(self._unit_codes[keep], codes[keep], self._values)
                     inputs[f"sensitivity_{variant}"] = EstimateInput(
-                        self._unit_codes[keep], codes[keep], self._values
+                        self._unit_codes[keep], codes[keep], self._values, self._coder_codes[keep]
                     )
                     estimates[f"sensitivity_{variant}"] = self._estimate(
                         "sensitivity",
@@ -465,6 +470,7 @@ class ReliabilityStudy:
                 unit_strata=self._unit_strata,
                 distance=self._distance,
                 inputs=inputs,
+                coder_names=self._coder_names,
             ),
         )
 

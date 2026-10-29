@@ -3,9 +3,11 @@
 import numpy as np
 import pytest
 
+from simulations import coders
 from simulations.coverage import (
     Scenario,
     alpha_of,
+    draw_panel,
     run_cell,
     simulate,
     study_of,
@@ -76,6 +78,41 @@ def test_run_cell_smoke() -> None:
     }
     assert expected <= set(summary.columns)
     assert (summary["n_sim"] == 3).all()
+
+
+def test_panels_with_spread_give_coders_different_accuracies() -> None:
+    s = Scenario("x", 0, n_coders=10)
+    panel = draw_panel(s, 10, 0.2, np.random.default_rng(1))
+    assert panel.accuracy.std() > 0.1
+    assert panel.tilt == pytest.approx(0.4)
+    same = draw_panel(s, 10, 0.0, np.random.default_rng(1))
+    assert (same.accuracy == 0.8).all() and same.tilt == 0
+
+
+def test_a_panel_without_spread_reproduces_the_p5_data() -> None:
+    s = Scenario("baseline", 50)
+    plain = simulate(s, 50, np.random.default_rng([7, 1]))
+    panel = draw_panel(s, s.n_coders, 0.0, np.random.default_rng(99))
+    with_panel = simulate(s, 50, np.random.default_rng([7, 1]), panel)
+    np.testing.assert_array_equal(plain.codes, with_panel.codes)
+
+
+def test_coder_grid_smoke() -> None:
+    cs = coders.CoderScenario(Scenario("nominal", 30, n_coders=4), 0.2)
+    cell = coders.run_cell(cs, n_sim=2, n_resamples=50, base_seed=1, index=0)
+    summary = cell.summary()
+    assert list(summary["scheme"]) == ["units", "coders", "two_way", "jackknife"]
+    expected = {
+        "coverage_own",
+        "coverage_coders_fixed",
+        "coverage_questions_fixed",
+        "coverage_both_random",
+        "mean_width",
+        "both_random",
+        "both_random_mc_error",
+    }
+    assert expected <= set(summary.columns)
+    assert len(coders.scenarios()) == 19
 
 
 def test_grid_has_26_distinct_cells() -> None:

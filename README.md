@@ -8,13 +8,14 @@ reliability-lab is a study-design library for measuring the reliability of LLM a
 - declared measurement semantics: level, value domain, coder definition and design label;
 - white-box output: observed and expected disagreement, coincidence matrices and per-unit contributions;
 - explicit missing-data policies, because LLM failures are rarely unrelated to the item;
-- bootstrap intervals by a scheme you name: whole units or groups resampled (`scheme="units"`), or Krippendorff's KALPHA algorithm (`scheme="kalpha"`);
+- bootstrap intervals by a scheme you name: whole units or groups resampled (`scheme="units"`), coders resampled (`scheme="coders"`), both at once (`scheme="two_way"`), or Krippendorff's KALPHA algorithm (`scheme="kalpha"`);
+- a leave-one-coder-out jackknife that shows which coders drive alpha;
 - paired comparisons of two configurations on the same units, with the interval on the difference;
 - group-safe train/test splits that work with any scikit-learn splitter, with a saved manifest that reproduces the split;
 - versioned JSON and Parquet reports with provenance;
 - LLM judge workflows: a trace sidecar of judge configurations, declared retry handling, and evidence specific to each design (run agreement, order swaps and position bias).
 
-Mixed human-LLM panels and coverage simulations for the bootstrap schemes are next on the roadmap ([design document](docs/design/framing-v2.md)).
+Mixed human-LLM panels are next on the roadmap ([design document](docs/design/framing-v2.md)).
 
 > **Reliability is not validity.** Coders can agree consistently and still be wrong in the same way, for example because of a flawed rubric or a bias they share. When results come from different designs (repeatability, inter-model agreement, human panels), they are reported as different quantities and are never pooled.
 
@@ -54,7 +55,7 @@ print(result.summary())
 
 ## Intervals and comparisons
 
-Every interval names its scheme, because the two schemes answer different questions. `scheme` is a required argument.
+Every interval names its scheme, because the schemes answer different questions. `scheme` is a required argument.
 
 ```python
 boot = result.bootstrap(scheme="units", n_resamples=2000, random_state=7)
@@ -63,6 +64,22 @@ print(boot.summary())  # 95% percentile intervals for every missing-data policy
 
 - `scheme="units"` resamples whole units, and whole groups when a `group` column is declared. It can also resample within declared strata (`strata=True`), and it recomputes the expected disagreement in every replicate. `method="bca"` gave the most accurate coverage in the simulations; on small samples dominated by one category it can fail, and that is warned about.
 - `scheme="kalpha"` reproduces Krippendorff's KALPHA algorithm. It resamples pairs of values and holds the expected disagreement fixed.
+
+The units scheme holds the coders fixed: its interval is about these coders on other questions. When the claim is about coders like these, such as 10 runs of an LLM judge standing for the judge or a few annotators standing for trained annotators, the coders are a sample too:
+
+- `scheme="two_way"` resamples questions (or groups) and coders independently. Its interval is about new coders on new questions; in the simulations it covered 92–98% with 10 coders or more when the coders differed, and erred on the wide side when they did not.
+- `result.coder_jackknife()` recomputes alpha without each coder in turn. It gives an interval for these questions with new coders, and an influence table showing how much each coder moves alpha.
+- `scheme="coders"` resamples coders and holds the questions fixed. It answers the jackknife's question, but its percentile interval was too narrow in the simulations; prefer the jackknife.
+
+Repeated runs of one judge configuration differ only by chance, so the units interval already covers new runs.
+
+```python
+boot = result.bootstrap(scheme="two_way", n_resamples=2000, random_state=7)
+jk = result.coder_jackknife()
+print(jk.summary())  # interval, standard error, and the most influential coders
+```
+
+When coders are resampled, the copies of one coder are never paired with each other, since a coder always agrees with itself. These schemes need at least 3 coders and give percentile intervals.
 
 Which scheme to trust, and when, is measured by simulation in the [bootstrap coverage guidance](docs/guidance/bootstrap-coverage.md).
 
