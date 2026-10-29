@@ -11,7 +11,7 @@ from reference import reference_alpha
 
 from reliability_lab import RatingFrame, ReliabilityStudy, UndefinedAlphaError
 
-LEVELS = ["nominal", "ordinal", "interval", "ratio"]
+LEVELS = ["nominal", "ordinal", "interval", "ratio", "bipolar"]
 
 # Random data often has one dominant category; the warning is expected here.
 pytestmark = pytest.mark.filterwarnings("ignore::reliability_lab.CategorySkewWarning")

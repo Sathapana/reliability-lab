@@ -116,8 +116,11 @@ class ReliabilityStudy:
     ratings:
         Validated long-form ratings.
     measurement:
-        ``"nominal"``, ``"ordinal"``, ``"interval"``, ``"ratio"``, or a
-        :class:`~reliability_lab.alpha.Distance`.
+        ``"nominal"``, ``"ordinal"``, ``"interval"``, ``"ratio"``, ``"bipolar"``,
+        ``circular(U)``, or a :class:`~reliability_lab.alpha.Distance`. Bipolar
+        distances take the scale's two poles from the smallest and largest declared
+        values. Circular distances need the circumference U (24 for hours, 360 for
+        degrees), so the string ``"circular"`` is refused.
     values:
         The legal values. For ordinal data their order is the scale order. The
         domain is always declared: pass ``ratings.observed_values()`` to declare the
@@ -935,6 +938,11 @@ def _resolve_distance(measurement: str | Distance) -> Distance:
         return measurement
     if isinstance(measurement, str) and measurement in BUILTIN_DISTANCES:
         return BUILTIN_DISTANCES[measurement]
+    if measurement == "circular":
+        raise DesignError(
+            "circular data need the circle's circumference: pass measurement=circular(U), "
+            "for example circular(24) for hours or circular(360) for degrees"
+        )
     raise DesignError(
         f"measurement must be one of {list(BUILTIN_DISTANCES)} or a Distance; got {measurement!r}"
     )

@@ -17,7 +17,7 @@ from fixtures.krippendorff2011 import (
 )
 from helpers import human_study
 
-from reliability_lab import Distance
+from reliability_lab import BIPOLAR, Distance, circular
 from reliability_lab.alpha import BUILTIN_DISTANCES, INTERVAL, ORDINAL, RATIO, per_unit_coincidences
 
 F4 = FOUR_CODERS_MISSING
@@ -143,25 +143,16 @@ def test_interval_and_ratio_tables() -> None:
         assert ratio[k, c] == ratio[c, k]
 
 
-def test_circular_and_bipolar_tables_as_custom_distances() -> None:
-    circumference = CIRCULAR_DIFFERENCES["circumference"]
-    circular = Distance(
-        "circular",
-        lambda v, m: np.sin(np.pi * (v[:, None] - v[None, :]) / circumference) ** 2,
-        numeric=True,
+def test_circular_and_bipolar_tables() -> None:
+    d = circular(CIRCULAR_DIFFERENCES["circumference"]).matrix(
+        CIRCULAR_DIFFERENCES["values"], np.ones(6)
     )
-    d = circular.matrix(CIRCULAR_DIFFERENCES["values"], np.ones(6))
     np.testing.assert_allclose(d[0], CIRCULAR_DIFFERENCES["first_row"], atol=1e-12)
     # Every row is the first row rotated: only the distance around the circle counts.
     for c in range(6):
         np.testing.assert_allclose(d[c], np.roll(d[0], c), atol=1e-12)
 
-    def bipolar(v: Any, m: Any) -> Any:
-        c, k = v[:, None], v[None, :]
-        denominator = (c + k - 2 * v.min()) * (2 * v.max() - c - k)
-        return np.where(c == k, 0.0, (c - k) ** 2 / np.where(denominator == 0, 1, denominator))
-
     values = BIPOLAR_DIFFERENCES["values"]
-    d = Distance("bipolar", bipolar, numeric=True).matrix(values, np.ones(5))
+    d = BIPOLAR.matrix(values, np.ones(5))
     for (c, k), printed in BIPOLAR_DIFFERENCES["printed"].items():
         assert round(d[values.index(c), values.index(k)], 3) == printed

@@ -1,7 +1,7 @@
 """reliability-lab: study design for the reliability of LLM and human judgments."""
 
 from reliability_lab._version import __version__
-from reliability_lab.alpha import INTERVAL, NOMINAL, ORDINAL, RATIO, Distance
+from reliability_lab.alpha import BIPOLAR, INTERVAL, NOMINAL, ORDINAL, RATIO, Distance, circular
 from reliability_lab.data import RatingFrame, Status
 from reliability_lab.design import CoderSpec, Design
 from reliability_lab.exceptions import (
@@ -33,6 +33,7 @@ from reliability_lab.split import SplitManifest
 from reliability_lab.study import Fold, ReliabilityStudy
 
 __all__ = [
+    "BIPOLAR",
     "INTERVAL",
     "NOMINAL",
     "ORDINAL",
@@ -67,4 +68,5 @@ __all__ = [
     "TraceWarning",
     "UndefinedAlphaError",
     "__version__",
+    "circular",
 ]
