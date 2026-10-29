@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `simulate_ratings` makes synthetic coder ratings for any measurement level (nominal, ordinal, interval, ratio, bipolar, `circular(U)` or a custom `Distance`) at a chosen alpha. Errors are random draws from the population or near misses by the metric's own distance, with optional missing cells and `parse_error` failures. The ratings come as a `RatingFrame`, ready for `ReliabilityStudy`.
 - A [roadmap](docs/design/roadmap.md) for 0.2 to 1.0. Mixed human-LLM panels move from 0.2 to 1.0, and the messages refusing them say so.
 
 ## 0.1.4
