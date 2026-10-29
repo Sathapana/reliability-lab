@@ -14,10 +14,10 @@ Two decisions shape the order:
 | Release | Theme | Contents | Gate |
 | --- | --- | --- | --- |
 | 0.2.0 | Decisions on a configuration change | Non-inferiority and equivalence in `compare()` (2.2); BCa failure reasons and opt-in fallback (1.2); category-skew diagnostic (1.3); unit triage (1.4) | Rejection rate at the margin within Monte Carlo error of the nominal level; a test for each BCa failure cause |
-| 0.3.0 | Planning and CI gates | Sample-size planning (2.3); CLI quality gates (4.2) | Planned sizes reach their stated power on fresh seeds; CLI runs the example fixtures end to end |
+| 0.3.0 | Planning, CI gates and Arrow input | Sample-size planning (2.3); CLI quality gates (4.2); Arrow input (4.1) | Planned sizes reach their stated power on fresh seeds; CLI runs the example fixtures end to end; polars, DuckDB and pyarrow inputs give the same ratings fingerprint as pandas |
 | 0.4.0 | Judge bias evidence | Within- and between-family alpha (3.2); unit covariates for length bias and self-enhancement (3.2); call telemetry, reduced (3.3) | Simulated same-family errors detected; fixtures for each diagnostic |
-| 0.5.0 | Companion coefficients and interoperability | `metrics/` with Gwet's AC1 and AC2 (1.3); Arrow input (4.1); plotting extra (4.3) | Parity with irrCAC |
-| 1.0.0 | Human-LLM alignment | Mixed panels; alignment averaged over individual annotators and against a consensus label (3.1) | Mixed-panel end-to-end fixture with hand-checked values; paired intervals checked against a naive loop |
+| 0.5.0 | Companion coefficients and plots | `metrics/` with Gwet's AC1 and AC2 (1.3); plotting extra (4.3) | Parity with irrCAC |
+| 1.0.0 | Human-LLM alignment and a stable release | Mixed panels; alignment averaged over individual annotators and against a consensus label (3.1); stable API; frozen report schema; coverage simulations for interval, ratio and mixed-panel data | Mixed-panel end-to-end fixture with hand-checked values; paired intervals checked against a naive loop; reports from 1.0 read back by later releases; guidance regenerated from full-size runs |
 | Research | Crossed intervals | A less conservative alternative to `two_way` (2.1) | Beats `two_way` on the coders grid |
 
 Each gate is a test, as in the framing: a release ships when its gate passes.
@@ -36,7 +36,7 @@ Each gate is a test, as in the framing: a release ships when its gate passes.
 | 3.1 `study.calibrate()` | Merged | Same question as the human-LLM alignment design. One log with the reference as rows, named "alignment", not "validity" or "gold". | 1.0.0 |
 | 3.2 Verbosity and family bias | Accepted, moved | Output length is a property of the unit, and the trace has one row per judge configuration, so lengths cannot live there. `model_family` is a ratings field, not a trace field. | 0.4.0 |
 | 3.3 Cost, latency, energy | Reduced | Tokens, latency and cost are per call, so they belong in the long-form log. Energy and the "Δα per 1,000 tokens" ratio are dropped. | 0.4.0 |
-| 4.1 Zero-copy DataFrame input | Accepted, other protocol | pandas is deprecating the `__dataframe__` interchange protocol in favour of the Arrow PyCapsule interface. Validation ends in pandas, so the input is convenient, not zero-copy. | 0.5.0 (can ship earlier) |
+| 4.1 Zero-copy DataFrame input | Accepted, other protocol | pandas is deprecating the `__dataframe__` interchange protocol in favour of the Arrow PyCapsule interface. Validation ends in pandas, so the input is convenient, not zero-copy. | 0.3.0 |
 | 4.2 CLI quality gates | Accepted, with a spec file | A study's declarations do not fit in command-line flags. | 0.3.0 |
 | 4.3 Terminal and figure plots | Accepted | Text interval bars in the core; figures in an optional extra. | 0.5.0 |
 
@@ -51,9 +51,23 @@ Each gate is a test, as in the framing: a release ships when its gate passes.
 
 ## 0.2.0: Decisions on a configuration change
 
-**Non-inferiority and equivalence (2.2).** `compare(a=reference, b=candidate, margin=δ, test="non_inferiority" | "equivalence", significance=0.05)`. The difference stays $\Delta = \alpha_b - \alpha_a$, so `a` is the reference.
+**Non-inferiority and equivalence (2.2).** `compare(a=reference, b=candidate, margin=δ, test="non_inferiority" | "equivalence")` (decided 29 Oct 2026). The difference stays $\Delta = \alpha_b - \alpha_a$, so `a` is the reference.
 
-- At level γ (`significance`), both tests read the paired $(1 - 2\gamma)$ interval, which is reported with the verdict so the decision can be checked by eye. The parameter is not named `alpha` (the coefficient) or `level` (the resampling level, already a `compare()` argument).
+```python
+diff = study.compare(
+    a={"condition_id": "frontier"},   # reference
+    b={"condition_id": "distilled"},  # candidate
+    margin=0.03,
+    test="non_inferiority",           # or "equivalence"
+    confidence=0.95,                  # one-sided 2.5% test
+    n_resamples=2000,
+    random_state=7,
+)
+diff.verdicts["as_missing"]  # "non_inferior" | "inferior" | "inconclusive"
+```
+
+- The verdict reads the paired interval that `compare()` already reports at `confidence`. There is no separate significance parameter, so a report holds one interval and the verdict can always be checked against it by eye.
+- Reading the lower end of a two-sided interval at `confidence` is a one-sided non-inferiority test at level (1 − `confidence`) / 2. The default 95% gives the conventional 2.5% test. Equivalence (two one-sided tests) at level γ needs `confidence` = 1 − 2γ, so a 5% equivalence test uses `confidence=0.90`; the guidance says so.
 - Each test has its own verdicts. The draft's single list mixes them.
   - **Non-inferiority:** `non_inferior` when the lower end is above −δ; `inferior` when the upper end is below −δ; otherwise `inconclusive`.
   - **Equivalence:** `equivalent` when the interval lies inside (−δ, δ); `not_equivalent` when it lies outside [−δ, δ]; otherwise `inconclusive`.
@@ -66,9 +80,9 @@ Each gate is a test, as in the framing: a release ships when its gate passes.
 - **Category-skew diagnostic (1.3).** A `category_skew` diagnostic gives the normalised entropy of the pairable values over the declared domain, $H / \ln K$, and the effective number of categories, $e^H$. The existing `CategorySkewWarning` (one value holding 90% or more) keeps its share-based rule. The draft's rule, $D_e < 0.15$ and $1 - D_o > 0.85$, holds for nominal data only. Under the other metrics, $D_o$ and $D_e$ are in the scale's squared units, and $1 - D_o$ is not observed agreement.
 - **Unit triage (1.4).** `estimate.per_unit` gains each unit's status counts (abstained, inapplicable, failed). Sorted by `d_o_contribution`, it is the adjudication list. No new study methods: coder influence is `coder_jackknife().influence`, and unit disagreement is `estimate.per_unit`.
 
-**Gate.** A simulation grid of paired arms whose true difference sits on the margin. The non-inferiority rejection rate must stay within Monte Carlo error of γ, with a power curve at Δ = 0. `tests/test_bca.py` gains a case for each BCa failure cause, and the new interval fields survive a JSON round trip.
+**Gate.** A simulation grid of paired arms whose true difference sits on the margin. The non-inferiority rejection rate must stay within Monte Carlo error of (1 − `confidence`) / 2, with a power curve at Δ = 0. `tests/test_bca.py` gains a case for each BCa failure cause, and the new interval fields survive a JSON round trip.
 
-## 0.3.0: Planning and CI gates
+## 0.3.0: Planning, CI gates and Arrow input
 
 **Sample-size planning (2.3).** A new `planning.py`; `design.py` holds coder definitions and design labels. The draft's inputs (target alpha, marginals, number of coders) do not determine how ratings are generated, so each plan names its generator:
 
@@ -80,14 +94,37 @@ The result records the generator and its parameters, and the documentation says 
 
 **CLI quality gates (4.2).** `[project.scripts] reliability-lab = "reliability_lab.cli:main"`, written with `argparse` and `tomllib`, both in the standard library from 3.11, so there are no new core dependencies.
 
-- Declarations come from a study file (TOML), not from flags. A study needs a measurement, values in scale order, coders, a design, missing-data policies, `abstain_as`, `inapplicable_as` and retries. These should be versioned with the judge.
+- Declarations come from a study file in TOML (decided 29 Oct 2026), not from flags. A study needs a measurement, values in scale order, coders, a design, missing-data policies, `abstain_as`, `inapplicable_as` and retries. These should be versioned with the judge, and comments in the file can record why a threshold or margin was chosen. The standard library reads TOML but cannot write it, so the CLI only reads study files.
+
+  ```toml
+  [study]
+  measurement = "ordinal"
+  values = [1, 2, 3, 4, 5]
+  coders = ["model_id", "condition_id"]
+  design = "prompt_robustness"
+  missing_policies = ["as_missing", "sensitivity"]
+  retries = "last"
+
+  [columns]
+  unit = "response_id"
+  rater = "rater_id"
+  value = "score"
+  status = "rating_status"
+
+  [gate]
+  min_alpha = 0.70
+  min_low = 0.60   # lower end of the 95% interval
+  ```
+
 - `reliability-lab evaluate study.toml --min-alpha 0.70 --min-low 0.60 --output report.json`
 - `reliability-lab compare study.toml --a condition_id=prompt_v1 --b condition_id=prompt_v2 --margin 0.03 --test non_inferiority`. It reads one log, or several concatenated, and selects the arms as the API does.
 - Ratings are read from CSV, or from Parquet with the `parquet` extra.
 - Exit codes: 0 pass; 1 usage or input error; 2 a threshold or verdict fails; 3 a design or trace finding (`TraceWarning`, `CoderDependenceWarning`), with `--strict` only.
 - Thresholds apply to every reported missing-data policy unless `--policy` names one. A judge that passes only when its failures are dropped does not pass silently.
 
-**Gate.** Planned sample sizes reach their stated power when re-simulated with fresh seeds. CLI tests run the example fixtures end to end and check exit codes and the JSON report.
+**Arrow input (4.1).** Moved from 0.5.0 on 29 Oct 2026, because the CLI reads Parquet through pyarrow anyway: one path from Arrow to pandas serves both. `RatingFrame.from_long` and `TraceSidecar.from_frame` accept any object with the Arrow PyCapsule stream interface (`__arrow_c_stream__`), such as polars data frames, DuckDB relations and pyarrow tables. The import goes through pyarrow (the `parquet` extra) and ends in pandas, because validation builds pandas columns. The promise is "no manual `to_pandas()`", not zero-copy.
+
+**Gate.** Planned sample sizes reach their stated power when re-simulated with fresh seeds. CLI tests run the example fixtures end to end and check exit codes and the JSON report. The same ratings passed as pandas, polars, DuckDB and pyarrow give the same ratings fingerprint.
 
 ## 0.4.0: Judge bias evidence
 
@@ -107,11 +144,9 @@ The library still only summarises logs and never calls providers (framing, non-g
 
 **Gate.** Simulated same-family correlated errors (the existing correlated-errors process) give higher within-family than between-family alpha. Fixtures cover each diagnostic and the unit-sidecar checks.
 
-## 0.5.0: Companion coefficients and interoperability
+## 0.5.0: Companion coefficients and plots
 
 **`metrics/` (1.3).** Gwet's AC1 (nominal) and AC2 (weighted) open the module the framing planned for later coefficients. They are reported as separate, labelled coefficients, never as diagnostics of alpha. They take the same declarations (the distance gives the weights) and the same missing-data policies. Kappas and ICC follow in the same module. G-theory variance components (2.1) belong with ICC, since they are the variance decomposition ICC is built from.
-
-**Arrow input (4.1).** `RatingFrame.from_long` and `TraceSidecar.from_frame` accept any object with the Arrow PyCapsule stream interface (`__arrow_c_stream__`), such as polars data frames, DuckDB relations and pyarrow tables. The import goes through pyarrow (the `parquet` extra) and ends in pandas, because validation builds pandas columns. The promise is "no manual `to_pandas()`", not zero-copy. This item depends on nothing else and can ship in any release.
 
 **Plots (4.3).**
 
@@ -120,9 +155,9 @@ The library still only summarises logs and never calls providers (framing, non-g
 
 **Gate.** AC1 and AC2 match irrCAC in the isolated parity job CI already runs. Plot tests check figure structure (axes, labels, one mark per estimate), not pixels.
 
-## 1.0.0: Human-LLM alignment
+## 1.0.0: Human-LLM alignment and a stable release
 
-Moved from 0.2.0 on 29 Oct 2026. Until then, `design="human_llm_alignment"` and ratings that mix human and LLM rows are refused with a message naming 1.0.
+Alignment moved from 0.2.0 on 29 Oct 2026. Until then, `design="human_llm_alignment"` and ratings that mix human and LLM rows are refused with a message naming 1.0. Besides alignment, 1.0 requires a stable API, a frozen report schema and wider coverage simulations ([below](#release-requirements)).
 
 **Mixed panels.** `check_design` accepts human and LLM rows together under `design="human_llm_alignment"`. Coders are defined as now: a human coder by `rater_id`, an LLM coder by model and condition.
 
@@ -140,7 +175,19 @@ Reports call this "alignment with the human reference". The framing holds that h
 
 **Intervals.** The units scheme resamples the same units for every quantity, as `compare()` does for two arms, and recomputes each average in every replicate. The gap between an LLM configuration's average and the humans' average then gets a paired interval. It answers whether the judge agrees with each annotator about as well as annotators agree with each other. Against a consensus, the interval is on the coefficient alone. No human counterpart is reported, because an annotator compared with a consensus built partly from their own labels would be favoured. Whether an LLM can replace a given annotator is a different test (`alttest`, Calderon et al. 2025) and stays out of scope.
 
-**Gate.** A provider-neutral end-to-end fixture of a mixed-panel study, with and without a consensus (validation plan, item 6). Hand-checked values cover human alpha, the averaged coefficient and the consensus coefficient. The paired intervals are checked against a naive loop, as the units scheme is.
+### Release requirements
+
+Decided 29 Oct 2026. A hosted API reference was considered and is not required for 1.0.
+
+- **Stable API.** Semantic versioning from 1.0: a name exported by `reliability_lab` (its `__all__`) is removed or changed only in a major release, after a deprecation warning for at least one minor release. Leftovers are removed before the freeze, such as `BootstrapResult.experimental`, which has always been false since 0.1.1. The README drops its "alpha" status, and the classifier moves to "Development Status :: 5 - Production/Stable".
+- **Frozen report schema.** JSON and Parquet reports already carry `schema_version` 1. From 1.0, 1.x releases may add fields but never remove or rename one; a change that would break a reader raises `schema_version`. Fields added before 1.0 (non-inferiority verdicts, BCa failure reasons, telemetry) are part of the frozen schema.
+- **Wider coverage simulations.** The guidance simulates nominal and 5-point ordinal data only. Before 1.0 it covers interval and ratio data, and mixed panels: the intervals on both alignment coefficients and on the gap between the LLM's average and the humans' average. Each recommendation in the guidance's "Which scheme to use" table holds or is revised.
+
+**Gate.**
+
+- A provider-neutral end-to-end fixture of a mixed-panel study, with and without a consensus (validation plan, item 6). Hand-checked values cover human alpha, the averaged coefficient and the consensus coefficient. The paired intervals are checked against a naive loop, as the units scheme is.
+- Golden report files written by 1.0 are committed, and every later 1.x release reads them in its tests.
+- The guidance is regenerated from committed full-size runs of the new grids.
 
 ## Research: a less conservative crossed interval
 
@@ -162,10 +209,10 @@ Reports call this "alignment with the human reference". The framing holds that h
 
 - [x] Human-LLM alignment moves from 0.2 to 1.0 (29 Oct 2026).
 - [x] Alignment coefficients: both, averaged over individual annotators and against a consensus label (29 Oct 2026).
-- [ ] Non-inferiority API: one `margin` with a `test` name (proposed here), or the draft's two margin arguments.
-- [ ] Study file format for the CLI: TOML (proposed here, standard library) or JSON.
-- [ ] Whether Arrow input moves earlier than 0.5.0.
-- [ ] What else 1.0 requires, for example declaring the API stable (the README marks the package alpha).
+- [x] Non-inferiority API: one `margin` with a `test` name, read from the `confidence` interval; no separate significance parameter (29 Oct 2026).
+- [x] Study file format for the CLI: TOML, read with the standard library (29 Oct 2026).
+- [x] Arrow input moves from 0.5.0 to 0.3.0, beside the CLI (29 Oct 2026).
+- [x] 1.0 also requires a stable API, a frozen report schema and coverage simulations for interval, ratio and mixed-panel data; a hosted API reference is not required (29 Oct 2026).
 
 ## References
 
