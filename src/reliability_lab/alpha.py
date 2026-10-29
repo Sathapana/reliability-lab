@@ -13,11 +13,16 @@ on the distance. Precomputing them once therefore serves every distance and ever
 bootstrap replicate. Only distances that depend on the marginals (ordinal) must be
 rebuilt from each replicate's ``n_c``.
 
+The built-in distances (nominal, ordinal, interval, ratio, bipolar and circular)
+are the difference functions of that paper.
+
 This module works on integer-coded numpy arrays only; ``study.py`` does the coding.
 """
 
 from __future__ import annotations
 
+import math
+import numbers
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -124,12 +129,53 @@ def _ratio(values: npt.NDArray[Any], marginals: FloatArray) -> FloatArray:
     return np.asarray(np.where(total == 0, 0.0, (diff / safe) ** 2), dtype=float)
 
 
+def _bipolar(values: npt.NDArray[Any], marginals: FloatArray) -> FloatArray:
+    # delta² = (c - k)² / ((c + k - 2 c_min)(2 c_max - c - k)), with c_min and c_max
+    # the ends of the declared scale. The denominator is zero only where c = k at an
+    # end, where the distance is zero.
+    v = values.astype(float)
+    c, k = v[:, None], v[None, :]
+    denominator = (c + k - 2 * v.min()) * (2 * v.max() - c - k)
+    safe = np.where(denominator == 0, 1.0, denominator)
+    return np.asarray(np.where(c == k, 0.0, (c - k) ** 2 / safe), dtype=float)
+
+
 NOMINAL = Distance("nominal", _nominal)
 ORDINAL = Distance("ordinal", _ordinal, depends_on_marginals=True)
 INTERVAL = Distance("interval", _interval, numeric=True)
 RATIO = Distance("ratio", _ratio, numeric=True)
+BIPOLAR = Distance("bipolar", _bipolar, numeric=True)
 
-BUILTIN_DISTANCES: dict[str, Distance] = {d.name: d for d in (NOMINAL, ORDINAL, INTERVAL, RATIO)}
+BUILTIN_DISTANCES: dict[str, Distance] = {
+    d.name: d for d in (NOMINAL, ORDINAL, INTERVAL, RATIO, BIPOLAR)
+}
+
+
+def circular(circumference: float) -> Distance:
+    """The circular distance sin²(π (c - k) / U) for values on a circle.
+
+    ``circumference`` is U, the length of one full turn in the values' units: 24
+    for hours of the day, 360 for degrees, 12 for months, 7 for days of the week.
+    The values alone cannot fix it (the last hour of the day may never be rated),
+    so it is always declared.
+    """
+    if (
+        isinstance(circumference, bool)
+        or not isinstance(circumference, numbers.Real)
+        or not math.isfinite(circumference)
+        or circumference <= 0
+    ):
+        raise DesignError(
+            f"the circumference must be a finite number above 0, got {circumference!r}"
+        )
+    u = float(circumference)
+    label = str(int(u)) if u.is_integer() else repr(u)
+
+    def fn(values: npt.NDArray[Any], marginals: FloatArray) -> FloatArray:
+        v = values.astype(float)
+        return np.asarray(np.sin(np.pi * (v[:, None] - v[None, :]) / u) ** 2, dtype=float)
+
+    return Distance(f"circular({label})", fn, numeric=True)
 
 
 def check_domain_size(n_values: int) -> str | None:

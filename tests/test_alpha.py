@@ -15,7 +15,7 @@ from reliability_lab.alpha import (
     per_unit_coincidences,
 )
 
-LEVELS = ["nominal", "ordinal", "interval", "ratio"]
+LEVELS = ["nominal", "ordinal", "interval", "ratio", "bipolar"]
 
 PUBLISHED = [
     (name, level, expected)

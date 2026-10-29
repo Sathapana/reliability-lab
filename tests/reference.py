@@ -64,6 +64,14 @@ def components_from_coincidences(
             i, j = sorted((order.index(a), order.index(b)))
             between = sum(n_c[order[g]] for g in range(i, j + 1))
             return float((between - (n_c[a] + n_c[b]) / 2) ** 2)
+        if level == "bipolar":
+            if a == b:
+                return 0.0
+            low, high = min(order), max(order)
+            return float((a - b) ** 2 / ((a + b - 2 * low) * (2 * high - a - b)))
+        if level.startswith("circular(") and level.endswith(")"):
+            circumference = float(level[len("circular(") : -1])
+            return math.sin(math.pi * (a - b) / circumference) ** 2
         raise ValueError(level)
 
     if n == 0:
