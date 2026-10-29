@@ -1,22 +1,23 @@
-# reliability-lab: Roadmap, 0.2 to 0.5
+# reliability-lab: Roadmap, 0.2 to 1.0
 
 Oct 29, 2026 · @Sathapana
 
-The phases of the [framing](framing-v2.md) (P0 to P5) shipped in 0.1.0a1 to 0.1.4. This plan sets the next four releases. It assigns the proposals of the "Development Roadmap (v0.2.0 → v0.5.0)" draft, after checking each one against the code at 0.1.4. Proposal numbers (1.1 to 4.3) refer to that draft.
+The phases of the [framing](framing-v2.md) (P0 to P5) shipped in 0.1.0a1 to 0.1.4. This plan sets the releases from 0.2 to 1.0. It assigns the proposals of the "Development Roadmap (v0.2.0 → v0.5.0)" draft, after checking each one against the code at 0.1.4. Proposal numbers (1.1 to 4.3) refer to that draft.
 
-Two changes to the draft decide the order:
+Two decisions shape the order:
 
-- **Human-LLM alignment stays the next release.** The framing commits mixed panels to v0.2, and the code already reserves `design="human_llm_alignment"` and refuses mixed rows with "planned for v0.2". The draft leaves mixed panels out and asks for `study.calibrate()` in v0.4; that proposal answers part of the same question, so it is folded into 0.2.0.
+- **Human-LLM alignment moves to 1.0.** The framing committed mixed panels to v0.2, and the code refused mixed rows with "planned for v0.2". On 29 Oct 2026 they were moved to 1.0, and the refusals now say so. The draft's `study.calibrate()` answers part of the same question, so it is folded into the 1.0 design.
 - **About a third of the draft has shipped.** The vectorised bootstrap, the pigeonhole (two-way) bootstrap, crossed coverage simulations, coder influence and per-unit disagreement already exist. They are listed in [Already shipped](#already-shipped) with where they live, and are not rebuilt.
 
 ## Summary
 
 | Release | Theme | Contents | Gate |
 | --- | --- | --- | --- |
-| 0.2.0 | Human-LLM alignment | Mixed panels and the alignment report (3.1); BCa failure reasons and opt-in fallback (1.2); category-skew diagnostic (1.3); unit triage (1.4) | Mixed-panel end-to-end fixture; paired intervals checked against a naive loop |
-| 0.3.0 | Decisions on a configuration change | Non-inferiority and equivalence in `compare()` (2.2); sample-size planning (2.3); CLI quality gates (4.2) | Rejection rate at the margin within Monte Carlo error of the nominal level |
+| 0.2.0 | Decisions on a configuration change | Non-inferiority and equivalence in `compare()` (2.2); BCa failure reasons and opt-in fallback (1.2); category-skew diagnostic (1.3); unit triage (1.4) | Rejection rate at the margin within Monte Carlo error of the nominal level; a test for each BCa failure cause |
+| 0.3.0 | Planning and CI gates | Sample-size planning (2.3); CLI quality gates (4.2) | Planned sizes reach their stated power on fresh seeds; CLI runs the example fixtures end to end |
 | 0.4.0 | Judge bias evidence | Within- and between-family alpha (3.2); unit covariates for length bias and self-enhancement (3.2); call telemetry, reduced (3.3) | Simulated same-family errors detected; fixtures for each diagnostic |
 | 0.5.0 | Companion coefficients and interoperability | `metrics/` with Gwet's AC1 and AC2 (1.3); Arrow input (4.1); plotting extra (4.3) | Parity with irrCAC |
+| 1.0.0 | Human-LLM alignment | Mixed panels; alignment averaged over individual annotators and against a consensus label (3.1) | Mixed-panel end-to-end fixture with hand-checked values; paired intervals checked against a naive loop |
 | Research | Crossed intervals | A less conservative alternative to `two_way` (2.1) | Beats `two_way` on the coders grid |
 
 Each gate is a test, as in the framing: a release ships when its gate passes.
@@ -30,9 +31,9 @@ Each gate is a test, as in the framing: a release ships when its gate passes.
 | 1.3 Prevalence paradox and skew | Split | The skew warning exists. The proposed flag rule holds for nominal data only. AC1/AC2 are coefficients, not diagnostics, and belong in the planned `metrics/` module. | 0.2.0 (entropy), 0.5.0 (AC1/AC2) |
 | 1.4 Coder influence and unit triage | Mostly shipped | `coder_jackknife().influence` and `estimate.per_unit` hold the proposed columns. Only a per-unit status breakdown is missing. | 0.2.0 (status breakdown) |
 | 2.1 Crossed resampling, G-theory | Shipped / research / deferred | `scheme="two_way"` is the pigeonhole bootstrap, and the coders grid simulates it. A less conservative crossed interval is open research. G-theory variance components are an ICC-family estimand. | Research; `metrics/` backlog |
-| 2.2 Non-inferiority and TOST | Accepted | Answers the primary user's question, "did an update change it?", with a declared margin. | 0.3.0 |
+| 2.2 Non-inferiority and TOST | Accepted | Answers the primary user's question, "did an update change it?", with a declared margin. | 0.2.0 |
 | 2.3 Sample-size planning | Accepted, re-scoped | Target alpha, marginals and coder count do not fix a data-generating process; the plan must name one. It belongs in a new module, not `design.py`. | 0.3.0 |
-| 3.1 `study.calibrate()` | Merged | Same question as the committed human-LLM alignment design. One log with the reference as rows, named "alignment", not "validity" or "gold". | 0.2.0 |
+| 3.1 `study.calibrate()` | Merged | Same question as the human-LLM alignment design. One log with the reference as rows, named "alignment", not "validity" or "gold". | 1.0.0 |
 | 3.2 Verbosity and family bias | Accepted, moved | Output length is a property of the unit, and the trace has one row per judge configuration, so lengths cannot live there. `model_family` is a ratings field, not a trace field. | 0.4.0 |
 | 3.3 Cost, latency, energy | Reduced | Tokens, latency and cost are per call, so they belong in the long-form log. Energy and the "Δα per 1,000 tokens" ratio are dropped. | 0.4.0 |
 | 4.1 Zero-copy DataFrame input | Accepted, other protocol | pandas is deprecating the `__dataframe__` interchange protocol in favour of the Arrow PyCapsule interface. Validation ends in pandas, so the input is convenient, not zero-copy. | 0.5.0 (can ship earlier) |
@@ -48,31 +49,7 @@ Each gate is a test, as in the framing: a release ships when its gate passes.
 - CI runs `uv run ruff check`, `uv run ruff format --check`, `uv run mypy` (strict, on `src` only) and `uv run pytest` on Linux, Windows and macOS, plus an isolated irrCAC parity job. `tests/test_parity.py` holds parity with third-party packages; parity of the vectorised path with the naive loop is in `tests/test_inference_units.py`.
 - `python -m simulations.run_coverage --quick` runs 50 replications. At 95% that is a Monte Carlo standard error of about 3 points, so it is a smoke run and cannot show that coverage did not regress. A change to inference reruns the affected cells at full size (`--cells`), commits the results and regenerates the guidance.
 
-## 0.2.0: Human-LLM alignment
-
-**Mixed panels.** `check_design` accepts human and LLM rows together under `design="human_llm_alignment"`. Coders are defined as now: a human coder by `rater_id`, an LLM coder by model and condition.
-
-**The alignment report.** Three quantities are reported, each labelled and never pooled:
-
-1. **Human alpha**: the human coders among themselves. It is the reference's own reliability, and it limits how much can be read into alignment.
-2. **LLM alpha**: the LLM coders among themselves.
-3. **Alignment**: agreement between each LLM configuration and the human reference. From proposal 3.1 it adds the mean shift (ordinal, interval and ratio data) and a status-aware confusion table: LLM value or failure status against the human value.
-
-The reference is either the human panel or a declared consensus label. A consensus enters as rows of the same `RatingFrame` (for example `rater_id="consensus"`), not as a separate argument, so one log carries one fingerprint and one split manifest. Reports call it "alignment with the human reference". The framing holds that human agreement is not automatic ground truth, so "criterion validity" and "gold" are not used.
-
-**Intervals.** The units scheme resamples the same units for all three quantities, as `compare()` does for two arms. The difference between alignment and human alpha then gets a paired interval. It answers whether the judge agrees with the humans about as well as they agree with each other. Whether an LLM can replace a given annotator is a different test (`alttest`, Calderon et al. 2025) and stays out of scope.
-
-**Decision before building.** Which alignment coefficient: alpha of each LLM configuration with each human coder, averaged over coders, or alpha of each configuration against the consensus. Both can be offered if each is labelled with its reference.
-
-**Riders from the draft's phase 1.**
-
-- **BCa failure reasons (1.2).** `Interval.undefined_reason` names the cause: undefined replicates (resamples holding one category, the common case in the guidance's skewed scenario), every replicate on one side of the estimate (infinite bias correction), or zero jackknife variance (undefined acceleration). An opt-in `on_undefined="percentile"` (the default `"nan"` keeps today's behaviour) returns the percentile interval over the defined replicates. That interval records `method_used="percentile"` in tables and JSON, and the `BootstrapWarning` says so. There is no fallback by default: in the guidance's skewed scenario at n = 30, the percentile interval covered 90.5%, and a reader of a BCa report should not get it without being told.
-- **Category-skew diagnostic (1.3).** A `category_skew` diagnostic gives the normalised entropy of the pairable values over the declared domain, $H / \ln K$, and the effective number of categories, $e^H$. The existing `CategorySkewWarning` (one value holding 90% or more) keeps its share-based rule. The draft's rule, $D_e < 0.15$ and $1 - D_o > 0.85$, holds for nominal data only. Under the other metrics, $D_o$ and $D_e$ are in the scale's squared units, and $1 - D_o$ is not observed agreement.
-- **Unit triage (1.4).** `estimate.per_unit` gains each unit's status counts (abstained, inapplicable, failed). Sorted by `d_o_contribution`, it is the adjudication list. No new study methods: coder influence is `coder_jackknife().influence`, and unit disagreement is `estimate.per_unit`.
-
-**Gate.** A provider-neutral end-to-end fixture of a mixed-panel study (validation plan, item 6), with hand-checked values for the three quantities. The paired intervals are checked against a naive loop, as the units scheme is.
-
-## 0.3.0: Decisions on a configuration change
+## 0.2.0: Decisions on a configuration change
 
 **Non-inferiority and equivalence (2.2).** `compare(a=reference, b=candidate, margin=δ, test="non_inferiority" | "equivalence", significance=0.05)`. The difference stays $\Delta = \alpha_b - \alpha_a$, so `a` is the reference.
 
@@ -83,11 +60,21 @@ The reference is either the human panel or a declared consensus label. A consens
 - There is a verdict for every missing-data policy. An undefined interval is `inconclusive`. The margin and the test go into the declarations, the provenance and the JSON. The guidance tells users to fix the margin before looking at results.
 - Bootstrap p-values are reported only if they invert the same interval (percentile or BCa), so a p-value can never contradict its verdict.
 
+**Riders from the draft's phase 1.**
+
+- **BCa failure reasons (1.2).** `Interval.undefined_reason` names the cause: undefined replicates (resamples holding one category, the common case in the guidance's skewed scenario), every replicate on one side of the estimate (infinite bias correction), or zero jackknife variance (undefined acceleration). An opt-in `on_undefined="percentile"` (the default `"nan"` keeps today's behaviour) returns the percentile interval over the defined replicates. That interval records `method_used="percentile"` in tables and JSON, and the `BootstrapWarning` says so. There is no fallback by default: in the guidance's skewed scenario at n = 30, the percentile interval covered 90.5%, and a reader of a BCa report should not get it without being told.
+- **Category-skew diagnostic (1.3).** A `category_skew` diagnostic gives the normalised entropy of the pairable values over the declared domain, $H / \ln K$, and the effective number of categories, $e^H$. The existing `CategorySkewWarning` (one value holding 90% or more) keeps its share-based rule. The draft's rule, $D_e < 0.15$ and $1 - D_o > 0.85$, holds for nominal data only. Under the other metrics, $D_o$ and $D_e$ are in the scale's squared units, and $1 - D_o$ is not observed agreement.
+- **Unit triage (1.4).** `estimate.per_unit` gains each unit's status counts (abstained, inapplicable, failed). Sorted by `d_o_contribution`, it is the adjudication list. No new study methods: coder influence is `coder_jackknife().influence`, and unit disagreement is `estimate.per_unit`.
+
+**Gate.** A simulation grid of paired arms whose true difference sits on the margin. The non-inferiority rejection rate must stay within Monte Carlo error of γ, with a power curve at Δ = 0. `tests/test_bca.py` gains a case for each BCa failure cause, and the new interval fields survive a JSON round trip.
+
+## 0.3.0: Planning and CI gates
+
 **Sample-size planning (2.3).** A new `planning.py`; `design.py` holds coder definitions and design labels. The draft's inputs (target alpha, marginals, number of coders) do not determine how ratings are generated, so each plan names its generator:
 
 1. For nominal data, the minimum-sample-size rule in Krippendorff's *Content Analysis*: the number of values needed for a given minimum alpha, smallest category probability and significance level. The exact table and edition are to be verified before building.
 2. For every metric, simulation with the latent-class "know or guess" generator of `simulations/`. That generator moves into the package, because the wheel ships `src/reliability_lab` only. The search over N uses common random numbers and a monotone fit, because a plain binary search on noisy power estimates can stop on noise.
-3. The same machinery plans non-inferiority: the number of units needed to show non-inferiority at margin δ when the true difference is zero.
+3. The same machinery plans the non-inferiority test of 0.2.0: the number of units needed to show non-inferiority at margin δ when the true difference is zero.
 
 The result records the generator and its parameters, and the documentation says the answer holds for that generator only.
 
@@ -100,7 +87,7 @@ The result records the generator and its parameters, and the documentation says 
 - Exit codes: 0 pass; 1 usage or input error; 2 a threshold or verdict fails; 3 a design or trace finding (`TraceWarning`, `CoderDependenceWarning`), with `--strict` only.
 - Thresholds apply to every reported missing-data policy unless `--policy` names one. A judge that passes only when its failures are dropped does not pass silently.
 
-**Gate.** A simulation grid of paired arms whose true difference sits on the margin. The non-inferiority rejection rate must stay within Monte Carlo error of γ, with a power curve at Δ = 0. Planned sample sizes reach their stated power when re-simulated with fresh seeds. CLI tests run the example fixtures end to end and check exit codes and the JSON report.
+**Gate.** Planned sample sizes reach their stated power when re-simulated with fresh seeds. CLI tests run the example fixtures end to end and check exit codes and the JSON report.
 
 ## 0.4.0: Judge bias evidence
 
@@ -133,6 +120,28 @@ The library still only summarises logs and never calls providers (framing, non-g
 
 **Gate.** AC1 and AC2 match irrCAC in the isolated parity job CI already runs. Plot tests check figure structure (axes, labels, one mark per estimate), not pixels.
 
+## 1.0.0: Human-LLM alignment
+
+Moved from 0.2.0 on 29 Oct 2026. Until then, `design="human_llm_alignment"` and ratings that mix human and LLM rows are refused with a message naming 1.0.
+
+**Mixed panels.** `check_design` accepts human and LLM rows together under `design="human_llm_alignment"`. Coders are defined as now: a human coder by `rater_id`, an LLM coder by model and condition.
+
+**The alignment report.** Each quantity is labelled and none is pooled with another:
+
+1. **Human alpha**: the human coders among themselves. It is the reference's own reliability, and it limits how much can be read into alignment. Beside it, the average pairwise alpha over pairs of human coders, the counterpart of the first alignment coefficient.
+2. **LLM alpha**: the LLM coders among themselves.
+3. **Alignment**, as two coefficients (decided 29 Oct 2026):
+   - **Averaged over annotators.** For each LLM configuration, alpha of the two-coder panel it forms with each human coder, averaged over the human coders. It is compared with the humans' average pairwise alpha, computed the same way, because a two-coder alpha and an alpha of the whole panel are different quantities.
+   - **Against a consensus label.** For each LLM configuration, alpha of the two-coder panel it forms with a declared consensus. The consensus enters as rows of the same `RatingFrame` (for example `rater_id="consensus"`) and is declared as the reference, so one log carries one fingerprint and one split manifest. It is derived from the human coders, so it is left out of human alpha and of the averaged coefficient.
+
+   For each coefficient, proposal 3.1 adds the mean shift (ordinal, interval and ratio data) and a status-aware confusion table: LLM value or failure status against the reference value.
+
+Reports call this "alignment with the human reference". The framing holds that human agreement is not automatic ground truth, so "criterion validity" and "gold" are not used.
+
+**Intervals.** The units scheme resamples the same units for every quantity, as `compare()` does for two arms, and recomputes each average in every replicate. The gap between an LLM configuration's average and the humans' average then gets a paired interval. It answers whether the judge agrees with each annotator about as well as annotators agree with each other. Against a consensus, the interval is on the coefficient alone. No human counterpart is reported, because an annotator compared with a consensus built partly from their own labels would be favoured. Whether an LLM can replace a given annotator is a different test (`alttest`, Calderon et al. 2025) and stays out of scope.
+
+**Gate.** A provider-neutral end-to-end fixture of a mixed-panel study, with and without a consensus (validation plan, item 6). Hand-checked values cover human alpha, the averaged coefficient and the consensus coefficient. The paired intervals are checked against a naive loop, as the units scheme is.
+
 ## Research: a less conservative crossed interval
 
 `scheme="two_way"` is the pigeonhole bootstrap. When coders are alike, it covered 99.3–99.8% and was about 1.5 times as wide as the units interval, because it counts the rating noise twice (Owen 2007). Candidates are Owen's variance correction for the pigeonhole bootstrap and a two-way jackknife. A replacement ships only if, on the coders grid, it covers 93% or more in every scenario and is narrower than `two_way` when τ = 0. There is no release target.
@@ -149,12 +158,14 @@ The library still only summarises logs and never calls providers (framing, non-g
 | Skew warning (1.3) | `CategorySkewWarning`, `estimate.category_distribution`, `estimate.observed_agreement` |
 | BCa degeneracy handling (1.2, part) | An undefined BCa interval gives a reason and a `BootstrapWarning` pointing to `method="percentile"`; parity with `scipy.stats.bootstrap` on degenerate data in `tests/test_bca.py` |
 
-## Open decisions
+## Decisions
 
-- [ ] Alignment coefficient for 0.2.0: averaged over human coders, against a consensus, or both.
+- [x] Human-LLM alignment moves from 0.2 to 1.0 (29 Oct 2026).
+- [x] Alignment coefficients: both, averaged over individual annotators and against a consensus label (29 Oct 2026).
 - [ ] Non-inferiority API: one `margin` with a `test` name (proposed here), or the draft's two margin arguments.
 - [ ] Study file format for the CLI: TOML (proposed here, standard library) or JSON.
 - [ ] Whether Arrow input moves earlier than 0.5.0.
+- [ ] What else 1.0 requires, for example declaring the API stable (the README marks the package alpha).
 
 ## References
 

@@ -119,7 +119,7 @@ def test_mixed_human_and_llm_rows_are_refused() -> None:
     ratings = RatingFrame.from_long(
         df, unit="unit", rater="who", value="v", model_id="model", condition_id="cond"
     )
-    with pytest.raises(DesignError, match=r"v0\.2"):
+    with pytest.raises(DesignError, match=r"v1\.0"):
         ReliabilityStudy(
             ratings, measurement="nominal", values=[1, 2], coders="rater_id", design="human_panel"
         )

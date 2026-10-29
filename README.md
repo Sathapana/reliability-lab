@@ -15,7 +15,7 @@ reliability-lab is a study-design library for measuring the reliability of LLM a
 - versioned JSON and Parquet reports with provenance;
 - LLM judge workflows: a trace sidecar of judge configurations, declared retry handling, and evidence specific to each design (run agreement, order swaps and position bias).
 
-Mixed human-LLM panels are next ([roadmap](https://github.com/Sathapana/reliability-lab/blob/main/docs/design/roadmap.md), [design document](https://github.com/Sathapana/reliability-lab/blob/main/docs/design/framing-v2.md)).
+Mixed human-LLM panels are planned for 1.0 ([roadmap](https://github.com/Sathapana/reliability-lab/blob/main/docs/design/roadmap.md), [design document](https://github.com/Sathapana/reliability-lab/blob/main/docs/design/framing-v2.md)).
 
 > **Reliability is not validity.** Coders can agree consistently and still be wrong in the same way, for example because of a flawed rubric or a bias they share. When results come from different designs (repeatability, inter-model agreement, human panels), they are reported as different quantities and are never pooled.
 
