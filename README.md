@@ -1,6 +1,6 @@
 # reliability-lab
 
-**Status: alpha (0.1.2).** The API may still change between releases.
+**Status: alpha (0.1.3).** The API may still change between releases.
 
 reliability-lab is a study-design library for measuring the reliability of LLM and human judgments. It is built on Krippendorff's alpha. Alpha implementations already exist in Python. This package adds the workflow around the coefficient:
 
