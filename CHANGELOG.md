@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.3
+
 Faster bootstrap.
 
 - Every scheme is faster. With 2,000 resamples of 5,000 units and 5 coders (ordinal, 3 estimates):
@@ -11,6 +13,7 @@ Faster bootstrap.
   - coders: 8.2 s → 1.4 s, and two_way: 10 s → 2.1 s.
 - BCa intervals no longer go through `scipy.stats.bootstrap`. The jackknife leaves each cluster out in closed form, instead of recomputing alpha from k × k resample weights, so BCa now runs on large studies: 20,000 units take 3.7 s, where they previously ran out of memory. The resamples and the interval are still the ones `scipy.stats.bootstrap` gives, and the tests check this.
 - The random draws are unchanged: a given `random_state` gives the same intervals as in 0.1.2, up to floating-point rounding.
+- The README links to the docs and examples on GitHub, so the links work on PyPI. The project links on PyPI include the changelog.
 
 ## 0.1.2
 
