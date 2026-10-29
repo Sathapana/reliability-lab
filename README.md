@@ -83,7 +83,7 @@ print(jk.summary())  # interval, standard error, and the most influential coders
 
 When coders are resampled, the copies of one coder are never paired with each other, since a coder always agrees with itself. These schemes need at least 3 coders and give percentile intervals.
 
-Which scheme to trust, and when, is measured by simulation in the [bootstrap coverage guidance](https://github.com/Sathapana/reliability-lab/blob/main/docs/guidance/bootstrap-coverage.md).
+Which scheme to trust, and when, is measured by simulation in the [bootstrap coverage guidance](https://github.com/Sathapana/reliability-lab/blob/main/docs/guidance/bootstrap-coverage.md). The [bootstrap tutorial notebook](https://github.com/Sathapana/reliability-lab/blob/main/notebooks/tutorial_bootstrap.ipynb) ([open in Colab](https://colab.research.google.com/github/Sathapana/reliability-lab/blob/main/notebooks/tutorial_bootstrap.ipynb)) reproduces small versions of those experiments.
 
 To compare two configurations of a judge, for example two prompts, select each one's rows. Both must cover the same units. Every replicate resamples the same units for both, and the interval is on the difference:
 
