@@ -29,6 +29,7 @@ from reliability_lab.report import (
     JackknifeResult,
     Provenance,
 )
+from reliability_lab.simulate import simulate_ratings
 from reliability_lab.split import SplitManifest
 from reliability_lab.study import Fold, ReliabilityStudy
 
@@ -69,4 +70,5 @@ __all__ = [
     "UndefinedAlphaError",
     "__version__",
     "circular",
+    "simulate_ratings",
 ]

@@ -1,6 +1,6 @@
 # reliability-lab
 
-**Status: alpha (0.1.4).** The API may still change between releases.
+**Status: alpha (0.1.5).** The API may still change between releases.
 
 reliability-lab is a study-design library for measuring the reliability of LLM and human judgments. It is built on Krippendorff's alpha. Alpha implementations already exist in Python. This package adds the workflow around the coefficient:
 
@@ -52,6 +52,28 @@ study = ReliabilityStudy(
 result = study.alpha()
 print(result.summary())
 ```
+
+## Simulated ratings
+
+`simulate_ratings` makes synthetic coders for any measurement level, including `"bipolar"`, `circular(U)` and custom distances, at the alpha you choose. Use it to try the API, to see what a given alpha looks like in raw ratings, or to plan how many units a study needs.
+
+```python
+from reliability_lab import circular, simulate_ratings
+
+ratings = simulate_ratings(
+    circular(24),
+    list(range(24)),
+    n_units=200,
+    n_coders=4,
+    alpha=0.7,
+    errors="near",
+    missing=0.1,
+    failures=0.05,
+    random_state=1,
+)
+```
+
+Each coder reports the true value or makes an error. With `errors="random"` an error is a draw from the population; with `errors="near"` it lands close to the truth, as the metric defines closeness. Alpha computed from the ratings is the target on average, and varies around it from draw to draw. `missing` leaves cells unrated and `failures` records cells as `parse_error`. [examples/simulated.py](https://github.com/Sathapana/reliability-lab/blob/main/examples/simulated.py) runs every built-in metric.
 
 ## Intervals and comparisons
 
