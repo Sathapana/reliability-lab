@@ -53,6 +53,8 @@ result = study.alpha()
 print(result.summary())
 ```
 
+For a hands-on walkthrough, the [tutorial notebook](https://github.com/Sathapana/reliability-lab/blob/main/notebooks/tutorial_coder_reliability.ipynb) ([open in Colab](https://colab.research.google.com/github/Sathapana/reliability-lab/blob/main/notebooks/tutorial_coder_reliability.ipynb)) simulates 10 coders rating 200 units and measures their agreement on binary answers, multiple choice and scores from 1 to 10.
+
 ## Intervals and comparisons
 
 Every interval names its scheme, because the schemes answer different questions. `scheme` is a required argument.
