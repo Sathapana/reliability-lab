@@ -2,7 +2,8 @@
 
     uv run --group sim python -m simulations.report
 
-Reads ``simulations/results/coverage.csv`` and ``run_info.json``, draws the
+Reads ``coverage.csv`` and ``run_info.json`` from ``simulations/results/`` (the
+P5 grid) and ``simulations/results/coders/`` (coders that differ), draws the
 figures (light and dark PNGs, served through ``<picture>``), and fills the
 template ``simulations/templates/bootstrap-coverage.md``. The output is
 ``docs/guidance/bootstrap-coverage.md``. Edit the template, not the output.
@@ -40,6 +41,9 @@ TOKENS: dict[str, dict[str, str]] = {
         "units": "#2a78d6",
         "kalpha": "#eb6834",
         "bca": "#1baf7a",
+        "coders": "#eda100",
+        "two_way": "#e87ba4",
+        "jackknife": "#008300",
     },
     "dark": {
         "surface": "#1a1a19",
@@ -52,16 +56,25 @@ TOKENS: dict[str, dict[str, str]] = {
         "units": "#3987e5",
         "kalpha": "#d95926",
         "bca": "#199e70",
+        "coders": "#c98500",
+        "two_way": "#d55181",
+        "jackknife": "#008300",
     },
 }
 SCHEMES = ("units", "kalpha", "bca")
+#: Coder-grid schemes; their colours are slots 1, 4, 5 and 6, so units keeps its blue
+#: and no colour means one scheme here and another in the P5 figures.
+CODER_SCHEMES = ("units", "coders", "two_way", "jackknife")
 LABELS = {
     "units": "units (percentile)",
     "units_group": "units, group level",
     "kalpha": "KALPHA",
     "bca": "units (BCa)",
+    "coders": "coders",
+    "two_way": "two_way",
+    "jackknife": "coder jackknife",
 }
-MARKERS = {"units": "o", "kalpha": "s", "bca": "^"}
+MARKERS = {"units": "o", "kalpha": "s", "bca": "^", "coders": "s", "two_way": "^", "jackknife": "D"}
 FACTOR_LABELS = {
     "skewed": "Skewed prevalence (80/10/10)",
     "coders2": "2 coders",
@@ -242,14 +255,79 @@ def figure_coverage_by_factor(data: pd.DataFrame, mode: str, path: Path) -> None
     plt.close(fig)
 
 
+def figure_coverage_by_spread(data: pd.DataFrame, mode: str, path: Path) -> None:
+    """Coverage against coder spread, per panel size, at n = 100 (nominal).
+
+    Top row: each scheme against the claim it is built for. Bottom row: every
+    scheme against new coders on new questions.
+    """
+    t = TOKENS[mode]
+    cells = data[(data["scenario_name"] == "nominal") & (data["scenario_n_units"] == 100)]
+    spreads = sorted(cells["coder_spread"].unique())
+    panels = sorted(cells["scenario_n_coders"].unique())
+    positions = list(range(len(spreads)))
+    rows = (
+        ("coverage_own", "Coverage of its own claim"),
+        ("coverage_both_random", "Coverage of new coders\non new questions"),
+    )
+    fig, axes = plt.subplots(
+        len(rows), len(panels), figsize=(8.4, 5.6), sharex=True, sharey=True, dpi=200
+    )
+    fig.patch.set_facecolor(t["surface"])
+    floor = _floor(pd.concat([cells[metric] for metric, _ in rows]))
+    handles = []
+    for row, (metric, ylabel) in enumerate(rows):
+        for col, m in enumerate(panels):
+            ax = axes[row][col]
+            _style(ax, t)
+            ax.plot([-0.3, positions[-1] + 0.15], [0.95, 0.95], color=t["ink2"], linewidth=1 * PX)
+            if col == len(panels) - 1:
+                ax.text(
+                    positions[-1] + 0.25,
+                    0.95,
+                    "95%",
+                    color=t["ink2"],
+                    fontsize=8,
+                    ha="left",
+                    va="center",
+                )
+            panel = cells[cells["scenario_n_coders"] == m]
+            for scheme in CODER_SCHEMES:
+                series = panel[panel["scheme"] == scheme].set_index("coder_spread")
+                line = _series(ax, t, positions, [series.loc[s, metric] for s in spreads], scheme)
+                if row == 0 and col == 0:
+                    handles.append(line)
+            ax.set_ylim(floor, 1.0)
+            ax.yaxis.set_major_formatter(lambda v, _: f"{v:.0%}")
+            ax.set_xticks(positions, [f"{TAU} = {s:g}" for s in spreads])
+            ax.set_xlim(-0.3, positions[-1] + 0.7)
+            if row == 0:
+                ax.set_title(f"{m} coders, 100 questions", color=t["ink"], fontsize=10, loc="left")
+            if col == 0:
+                ax.set_ylabel(ylabel, color=t["ink2"], fontsize=9)
+    _legend(fig, t, handles)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.savefig(path, facecolor=t["surface"])
+    plt.close(fig)
+
+
+#: name: (draw, alt text, results it is drawn from)
 FIGURES = {
     "coverage_by_n": (
         figure_coverage_by_n,
         "Coverage and mean width against sample size for the three schemes",
+        "base",
     ),
     "coverage_by_factor": (
         figure_coverage_by_factor,
         "Coverage of each scheme under each one-factor variation",
+        "base",
+    ),
+    "coverage_by_spread": (
+        figure_coverage_by_spread,
+        "Coverage of the units, coders and two-way bootstraps and the coder jackknife "
+        "as coders differ more",
+        "coders",
     ),
 }
 
@@ -269,6 +347,7 @@ def picture(name: str, alt: str) -> str:
 #: Shown for values that are undefined or not applicable (an en dash).
 MISSING = chr(0x2013)
 TIMES = chr(0x00D7)
+TAU = chr(0x03C4)
 
 
 def _pct(x: float) -> str:
@@ -370,43 +449,75 @@ def table_failures(data: pd.DataFrame) -> str:
     return _markdown(pd.DataFrame(rows))
 
 
+def table_coders(data: pd.DataFrame) -> str:
+    """Coverage (mean width) of each scheme against its own claim, per coder-grid cell."""
+    rows = []
+    for _, cell in data.drop_duplicates("cell").iterrows():
+        cells = data[data["cell"] == cell["cell"]].set_index("scheme")
+
+        def scored(scheme: str, cells: pd.DataFrame = cells) -> str:
+            row = cells.loc[scheme]
+            return f"{_pct(row['coverage_own'])} ({_num(row['mean_width'], 2)})"
+
+        rows.append(
+            {
+                "Scenario": f"{cell['scenario_name'].capitalize()}, {TAU} = "
+                f"{cell['coder_spread']:g}, {cell['scenario_n_coders']} coders, "
+                f"n = {cell['scenario_n_units']}",
+                "Population alpha": _num(cell["both_random"]),
+                "units: same coders": scored("units"),
+                "units: new coders": _pct(cells.loc["units", "coverage_both_random"]),
+                "coders: same questions": scored("coders"),
+                "jackknife: same questions": scored("jackknife"),
+                "two_way: new coders and questions": scored("two_way"),
+            }
+        )
+    return _markdown(pd.DataFrame(rows))
+
+
 def run_info_text(info: dict[str, Any], data: pd.DataFrame) -> str:
-    mc_error = data.drop_duplicates("cell")["true_alpha_mc_error"].max()
+    truth = "both_random" if info.get("grid") == "coders" else "true_alpha"
+    mc_error = data.drop_duplicates("cell")[f"{truth}_mc_error"].max()
     v = info["versions"]
     return (
         f"{info['scenarios']} scenarios {TIMES} {info['n_sim']:,} replications {TIMES} "
         f"{info['n_resamples']:,} bootstrap resamples, seed {info['seed']}, "
         f"reliability-lab {v['reliability_lab']} (numpy {v['numpy']}, scipy {v['scipy']}, "
         f"pandas {v['pandas']}); {info['wall_seconds'] / 60:.0f} minutes on "
-        f"{info['workers']} workers. The largest Monte Carlo error of a true alpha is "
+        f"{info['workers']} workers. The largest Monte Carlo error of a population alpha is "
         f"{mc_error:.4f}, and a coverage near 95% has a Monte Carlo standard error of "
         f"about {(0.95 * 0.05 / info['n_sim']) ** 0.5:.1%}."
     )
 
 
+#: name: (table, results it is drawn from)
 TABLES = {
-    "sample_size": table_sample_size,
-    "factors": table_factors,
-    "clusters": table_clusters,
-    "failures": table_failures,
+    "sample_size": (table_sample_size, "base"),
+    "factors": (table_factors, "base"),
+    "clusters": (table_clusters, "base"),
+    "failures": (table_failures, "base"),
+    "coders": (table_coders, "coders"),
 }
 
 
 def render(results: Path = RESULTS, template: Path = TEMPLATE, output: Path = OUTPUT) -> Path:
-    data, info = load(results)
+    """``results`` holds the P5 grid, and its ``coders/`` folder the coder grid."""
+    sources = {"base": load(results), "coders": load(results / "coders")}
     figures = output.parent / "figures"
     figures.mkdir(parents=True, exist_ok=True)
-    for name, (draw, _) in FIGURES.items():
+    for name, (draw, _, source) in FIGURES.items():
         for mode in ("light", "dark"):
-            draw(data, mode, figures / f"{name}-{mode}.png")
+            draw(sources[source][0], mode, figures / f"{name}-{mode}.png")
 
     def fill(match: re.Match[str]) -> str:
         kind, _, name = match.group(1).partition(":")
         if kind == "table":
-            return TABLES[name](data)
+            table, source = TABLES[name]
+            return table(sources[source][0])
         if kind == "figure":
             return picture(name, FIGURES[name][1])
         if kind == "run_info":
+            data, info = sources[name or "base"]
             return run_info_text(info, data)
         raise KeyError(match.group(0))
 

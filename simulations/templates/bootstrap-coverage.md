@@ -1,10 +1,16 @@
 # Bootstrap coverage: which interval to trust
 
-reliability-lab requires you to name a bootstrap scheme; there is no default. This page measures how often each scheme's 95% interval actually contains the true alpha, so you can choose one knowing what it does. The tables, charts and every number quoted in the text come from the committed run in `simulations/results/`.
+reliability-lab requires you to name a bootstrap scheme; there is no default. This page measures how often each scheme's 95% interval actually contains the true alpha, so you can choose one knowing what it does. The tables, charts and every number quoted in the text come from the committed runs in `simulations/results/` and `simulations/results/coders/`.
 
 ## Summary
 
-- **Use `scheme="units"`.** It resamples whole units, or whole groups when a `group` is declared. Percentile intervals cover 93–95% across the scenarios with independent units. The exceptions are small samples with a dominant category (about 90%) and clustered data resampled unit by unit (89–91%).
+- **Decide whose reliability you are claiming.** The units interval is about the coders in the study.
+  - When coders differ persistently, it covers new coders on new questions in as few as 48% of runs.
+  - For a claim about coders like these, use `scheme="two_way"` with 10 or more coders: it covers 92–98% when coders differ, and errs on the wide side when they do not.
+  - For these questions with other coders, use `coder_jackknife()`: it covers 94–96%.
+  - The `coders` bootstrap is too narrow (79–92%).
+  - Repeated runs of one judge configuration do not differ persistently, so the units interval covers them. See [Generalising over coders](#generalising-over-coders).
+- **Use `scheme="units"` for the coders you have.** It resamples whole units, or whole groups when a `group` is declared. Percentile intervals cover 93–95% across the scenarios with independent units. The exceptions are small samples with a dominant category (about 90%) and clustered data resampled unit by unit (89–91%).
 - **`method="bca"` is the most accurate interval measured.** It covers between 93.8% and 97.0% in every scenario except 20 clusters (92.9%), and its misses are balanced on both sides. On this evidence it is no longer flagged experimental. It fails to produce an interval in some small, skewed samples: 18% of runs at n = 30 with an 80% category. The library warns when that happens, and `method="percentile"` still gives an interval from the defined replicates.
 - **KALPHA is too narrow whenever a unit holds more than one pair of values.** It covers 85–86% with three coders on nominal data, 77–80% on a 5-point ordinal scale, and 70–71% with five coders. With two coders, where each unit holds one pair, it covers 92–94%. Use it to reproduce published KALPHA intervals, not for new claims.
 - **Declare groups when units share a source.** Resampling units of clustered data one by one covers 89–91%. Resampling groups covers 91.8% with 20 clusters and 94.5% with 40.
@@ -74,6 +80,57 @@ When units share a source (turns of one conversation, responses to one prompt), 
   - The units intervals still cover the dropped-failures value, at 93.7–95.0%. But that value is not the complete-data reliability, and the 0.03 gap does not shrink with more units.
 - **The spread of missing-data policies is not a bound.** Treating failures as their own category (`as_category`) gives a second, different estimate. The interval between the policies contained the complete-data alpha in only 48–66% of runs. Report the policies and the error rates side by side, and read their spread as how much the policy choice matters.
 
+## Generalising over coders
+
+In every scenario above, the coders are alike: they share one accuracy, so the only randomness is in which questions were drawn and in each rating. Real coders often differ persistently: one annotator is stricter, one model leans towards a label, one prompt is more careful. Then one study supports three different claims, and each needs its own interval.
+
+| Claim | Interval | Resampled |
+| --- | --- | --- |
+| These coders, on new questions | `scheme="units"` | questions (or groups) |
+| These questions, with new coders like these | `result.coder_jackknife()`, or `scheme="coders"` | coders |
+| New coders like these, on new questions | `scheme="two_way"` | questions and coders |
+
+Repeated runs of one judge configuration are the exception. Run 3 and run 7 differ only by chance, with no persistent difference between them, so they behave like the alike coders above. The units interval then already covers new runs.
+
+**Setup.**
+- **Coders differ by a spread τ.** Each coder's accuracy is 0.8 + τ·Z, with Z standard normal, clipped to [0.05, 1].
+- **Each coder has a favourite.** When a coder guesses, with probability min(0.5, 2τ) it picks its own favourite category (nominal) or leans one point in its own direction (ordinal).
+- **Grid.** τ = 0 reproduces the alike coders above; at τ = 0.2, the middle 95% of accuracies runs from about 0.4 to 1. The grid crosses τ ∈ {0, 0.1, 0.2} with 5, 10 or 20 coders and 50 or 100 questions on the nominal baseline. It adds one 5-point ordinal scenario with τ = 0.2, 10 coders and 100 questions.
+
+Each replication draws a panel of coders and a set of questions. Every interval is scored against the claim it is built for, computed fresh for that replication:
+- **Same coders, new questions.** Alpha of this panel on 20,000 new questions.
+- **Same questions, new coders.** Alpha of these questions rated by 2,000 new coders.
+- **New coders, new questions.** The population alpha. It is computed once per scenario, from 200,000 questions each rated by its own new coders.
+
+**Run.** {{run_info:coders}}
+
+{{figure:coverage_by_spread}}
+
+{{table:coders}}
+
+Each cell gives the coverage of the interval's own claim, with the mean width in brackets. The "units: new coders" column scores the units interval against a claim it is not built for.
+
+- **The units interval is about these coders.** It covers its own claim at 93–95% in every scenario.
+  - Read as a claim about new coders, it holds only when coders are alike: 94–95% at τ = 0.
+  - Once coders differ, it covers 70–83% at τ = 0.1 and 48–68% at τ = 0.2.
+  - More questions make this worse, not better. The interval narrows around this panel's alpha, but the panel's own distance from the population does not shrink. More coders help only slowly.
+- **`two_way` covers new coders on new questions.**
+  - With 10 or 20 coders it covers 92–98%. With 5 coders at τ = 0.2 it covers 88–91%.
+  - When coders are alike, it is conservative (99.3–99.8%) and about 1.5 times as wide as the units interval. It counts the rating noise twice, once through the questions and once through the coders, as pigeonhole bootstraps of crossed designs do (Owen 2007).
+- **The coder jackknife covers these questions with new coders.**
+  - It covers 93.7–96.2% in every scenario, including 5 coders.
+  - With 5 coders its t interval, with 4 degrees of freedom, is wide: 0.61–0.65 at τ = 0.2, against 0.41–0.48 for `two_way`.
+  - When coders differ strongly, the coders are most of the uncertainty, so it also covers new coders on new questions (93–95% at τ = 0.2). When coders are alike, it leaves out the questions' share and covers that claim at 87–96%.
+- **The `coders` bootstrap is too narrow.** It covers 79–85% with 5 coders, 88–91% with 10 and 90–92% with 20. A percentile interval from m coders behaves like a bootstrap of m observations, which understates the spread when m is small. For this claim, use the jackknife.
+- **Ordinal data follow the same pattern.** With τ = 0.2, 10 coders and 100 questions:
+  - the units interval covers new coders in 75.8% of runs;
+  - `two_way` covers them in 93.8%;
+  - the jackknife covers its own claim at 94.4%.
+
+**How many coders.** A claim about coders needs enough of them. With 5 coders, `two_way` under-covers when coders differ, and the jackknife covers but is wide. With 10 coders, `two_way` covers 92–98% when coders differ, and the jackknife covers 94–96%.
+
+**Which coders drive alpha.** `result.coder_jackknife().influence` lists alpha without each coder, and each coder's influence. It shows whether one annotator, model or prompt drives the result. It describes the data; it is not a test of whether coders differ. Choose the claim, and so the interval, from the design, before looking at the results.
+
 ## Which scheme to use
 
 | Situation | Use | Why |
@@ -84,10 +141,14 @@ When units share a source (turns of one conversation, responses to one prompt), 
 | Fewer than about 30 clusters | group resampling, read as approximate | 92% coverage with 20 clusters |
 | Reproducing a published KALPHA interval | `scheme="kalpha"` | matches Krippendorff's algorithm; too narrow for new claims with 3 or more coders |
 | Comparing two configurations | `study.compare()` | units scheme on identical resamples (KALPHA has no paired form) |
+| Repeated runs of one judge configuration | `scheme="units"` | runs differ only by chance, so the interval already covers new runs |
+| Coders differ (annotators, models, prompts), and the claim is about coders like them | `scheme="two_way"`, with 10 coders or more | units covers 48–83% of that claim; `two_way` covers 92–98% |
+| These questions with other coders, or which coders drive alpha | `result.coder_jackknife()` | 94–96% coverage, and an influence table per coder; the `coders` bootstrap is too narrow |
 
 ## Limitations
 
-- **One family of processes.** These scenarios use one family of data-generating processes (know or guess, with difficulty), up to 5 coders, up to 200 units, nominal and 5-point ordinal data, and 95% intervals. Interval and ratio metrics were not simulated.
+- **One family of processes.** These scenarios use one family of data-generating processes (know or guess, with difficulty), up to 20 coders, up to 200 units, nominal and 5-point ordinal data, and 95% intervals. Interval and ratio metrics were not simulated.
+- **Coders differ in one way.** In the coder grid, coders differ in accuracy and in a favourite label. Two other kinds of difference were not simulated beyond the one ordinal scenario: coders who use a scale differently, and coders who are good on some kinds of question and poor on others. Every coder rates every question, and no attempts fail.
 - **Truth uncertainty.** The true alphas carry a Monte Carlo error of at most 0.0025, small next to interval widths of 0.07 and more.
 - **BCa's undefined cases are real.** At n = 30 with an 80% category, one run in six produces no BCa interval.
 - **KALPHA's second pick.** KALPHA's result depends on reading its algorithm note as evalica does: a unit's second pick is redrawn when it repeats the first. Its coverage problem does not come from that detail. It comes from treating dependent pairs as independent.
@@ -95,8 +156,9 @@ When units share a source (turns of one conversation, responses to one prompt), 
 ## Reproduce
 
 ```bash
-uv run python -m simulations.run_coverage --workers 8     # about 20 minutes on 8 cores
-uv run --group sim python -m simulations.report           # tables, figures and this page
+uv run python -m simulations.run_coverage --workers 8                 # about 20 minutes on 8 cores
+uv run python -m simulations.run_coverage --grid coders --workers 8  # about an hour on 8 cores
+uv run --group sim python -m simulations.report                       # tables, figures and this page
 ```
 
-The seed and versions are recorded in `simulations/results/run_info.json`. Each replication's seed depends only on its scenario and index, so a rerun reproduces every number.
+The seeds and versions are recorded in `run_info.json` beside each `coverage.csv`. Each replication's seed depends only on its scenario and index, so a rerun reproduces every number.

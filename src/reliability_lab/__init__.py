@@ -26,6 +26,7 @@ from reliability_lab.report import (
     Coverage,
     Diagnostic,
     Interval,
+    JackknifeResult,
     Provenance,
 )
 from reliability_lab.split import SplitManifest
@@ -52,6 +53,7 @@ __all__ = [
     "DomainSizeWarning",
     "Fold",
     "Interval",
+    "JackknifeResult",
     "LeakageError",
     "Provenance",
     "RatingFrame",

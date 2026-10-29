@@ -4,15 +4,51 @@
 units and recomputes alpha with the P1 reference. ``naive_kalpha`` transcribes
 Krippendorff's bootstrap algorithm note line by line, consuming given draws.
 ``reference_pair_errors`` lists E(r) for every within-unit pair from the reference.
+``naive_two_way_alpha`` enumerates the copies of resampled units and coders and
+their pairs one by one, leaving out pairs between copies of one coder.
 """
 
 import math
+from collections import Counter
 from collections.abc import Hashable, Sequence
 from itertools import combinations
 from typing import Any
 
 import numpy as np
-from reference import reference_alpha, reference_components
+from reference import components_from_coincidences, reference_alpha, reference_components
+
+
+def naive_two_way_alpha(
+    matrix: dict[Hashable, Sequence[Any]],
+    level: str,
+    values: Sequence[Any],
+    unit_weights: Sequence[int],
+    coder_weights: Sequence[int],
+) -> float:
+    """Alpha after drawing unit u ``unit_weights[u]`` times and coder j ``coder_weights[j]`` times.
+
+    Each unit copy holds one copy of a value per coder copy. Its ordered pairs between
+    copies of different coders are weighted so the unit counts m_u values in all,
+    as in Krippendorff's 1/(m_u - 1) when no coder is copied.
+    """
+    rows = list(matrix.values())
+    o: Counter[tuple[Any, Any]] = Counter()
+    for u, unit_copies in enumerate(unit_weights):
+        copies = [
+            (j, row[u])
+            for j, row in enumerate(rows)
+            for _ in range(int(coder_weights[j]))
+            if row[u] is not None
+        ]
+        pairs = [
+            (a[1], b[1])
+            for i, a in enumerate(copies)
+            for k, b in enumerate(copies)
+            if i != k and a[0] != b[0]
+        ]
+        for pair in pairs:
+            o[pair] += unit_copies * len(copies) / len(pairs)
+    return components_from_coincidences(o, level, values).alpha
 
 
 def naive_units_alphas(

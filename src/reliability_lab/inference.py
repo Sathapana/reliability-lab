@@ -10,6 +10,12 @@ The caller always names the scheme:
   resamples pairs of values from the observed within-unit pairs, keeps each unit's
   number of pairs and their 1/(m_u - 1) weight, and holds D_e (and delta²) at the
   observed values.
+* ``coders`` resamples the coders with the units fixed, and ``two_way`` resamples
+  both, independently. A coder drawn twice contributes two copies of its values,
+  but copies of one coder are never paired with each other.
+
+The coder jackknife leaves each coder out in turn, for a standard error and an
+influence table.
 
 Paired comparisons apply one set of resampled units or groups to both
 configurations, so the interval falls on the difference alpha_b - alpha_a.
@@ -35,6 +41,7 @@ from reliability_lab.report import (
     BootstrapResult,
     ComparisonResult,
     Interval,
+    JackknifeResult,
     RecordedWarning,
     emit,
 )
@@ -42,7 +49,9 @@ from reliability_lab.report import (
 FloatArray = npt.NDArray[np.float64]
 IntArray = npt.NDArray[np.intp]
 
-SCHEMES: tuple[str, ...] = ("units", "kalpha")
+SCHEMES: tuple[str, ...] = ("units", "kalpha", "coders", "two_way")
+#: Coder resampling needs at least this many coders to say anything.
+MIN_CODERS = 3
 METHODS: tuple[str, ...] = ("percentile", "bca")
 LEVELS: tuple[str, ...] = ("unit", "group")
 #: Upper bound on the floats held per batch of replicates (bounds memory use).
@@ -56,22 +65,40 @@ KALPHA_NOTE = (
 )
 UNITS_NOTE = (
     "Units scheme: whole {level}s are resampled with replacement{within}, and D_e is "
-    "recomputed in every replicate."
+    "recomputed in every replicate. The coders are held fixed: the interval generalises "
+    "to new units rated by these coders."
+)
+CODERS_NOTE = (
+    "Coders scheme: the {n_coders} coders are resampled with replacement and the units "
+    "held fixed; pairs between copies of one coder are left out. The interval "
+    "generalises to new coders from the same pool, on these units. In simulations it "
+    "was too narrow (79-92% coverage with 5-20 coders); coder_jackknife() answers the "
+    "same question and covered 94-96%."
+)
+TWO_WAY_NOTE = (
+    "Two-way scheme: whole {level}s{within} and the {n_coders} coders are resampled "
+    "independently with replacement (a 'pigeonhole' bootstrap, conservative when the "
+    "coders hardly differ); pairs between copies of one coder are left out. The "
+    "interval generalises to new coders on new units."
 )
 
 
 @dataclass(frozen=True, eq=False)
 class EstimateInput:
-    """The coded pairable values behind one estimate: one entry per rating."""
+    """The coded pairable values behind one estimate: one entry per rating.
+
+    ``coder_idx`` indexes :attr:`StudySample.coder_names`.
+    """
 
     unit_idx: IntArray
     value_idx: IntArray
     values: tuple[Any, ...]
+    coder_idx: IntArray
 
 
 @dataclass(frozen=True, eq=False)
 class StudySample:
-    """What resampling needs from a study: its units, their clusters, and the coded inputs.
+    """What resampling needs from a study: its units, coders, clusters and coded inputs.
 
     ``unit_groups`` and ``unit_strata`` hold each unit's group and stratum label, or
     None when the field was not declared. ``inputs`` is keyed by estimate name.
@@ -82,10 +109,15 @@ class StudySample:
     unit_strata: npt.NDArray[np.object_] | None
     distance: Distance
     inputs: Mapping[str, EstimateInput]
+    coder_names: npt.NDArray[np.object_]
 
     @property
     def n_units(self) -> int:
         return len(self.unit_labels)
+
+    @property
+    def n_coders(self) -> int:
+        return len(self.coder_names)
 
 
 # -- units scheme -------------------------------------------------------------------
@@ -188,27 +220,92 @@ def replicate_alphas(
     """Alpha for each row of cluster weights; NaN where alpha is undefined."""
     w = np.atleast_2d(np.asarray(weights, dtype=float))
     n_values = len(values)
-    fixed = None if distance.depends_on_marginals else distance.matrix(values, np.ones(n_values))
     out = np.empty(len(w))
     batch = max(1, BATCH_FLOATS // max(n_values * n_values, 1))
     for start in range(0, len(w), batch):
         wb = w[start : start + batch]
         o = np.asarray(clusters.T @ wb.T, dtype=float).T.reshape(len(wb), n_values, n_values)
-        n_c = o.sum(axis=2)
-        n = n_c.sum(axis=1)
-        if fixed is not None:
-            observed = np.einsum("bij,ij->b", o, fixed)
-            expected = np.einsum("bi,ij,bj->b", n_c, fixed, n_c)
-        else:
-            delta2 = _batch_delta2(distance, values, n_c)
-            observed = np.einsum("bij,bij->b", o, delta2)
-            expected = np.einsum("bi,bij,bj->b", n_c, delta2, n_c)
+        out[start : start + len(wb)] = alphas_from_coincidences(o, values, distance)
+    return out
+
+
+def alphas_from_coincidences(
+    o: FloatArray, values: tuple[Any, ...], distance: Distance
+) -> FloatArray:
+    """Alpha for each coincidence matrix in a batch (batch x V x V); NaN where undefined."""
+    n_c = o.sum(axis=2)
+    n = n_c.sum(axis=1)
+    if not distance.depends_on_marginals:
+        fixed = distance.matrix(values, np.ones(len(values)))
+        observed = np.einsum("bij,ij->b", o, fixed)
+        expected = np.einsum("bi,ij,bj->b", n_c, fixed, n_c)
+    else:
+        delta2 = _batch_delta2(distance, values, n_c)
+        observed = np.einsum("bij,bij->b", o, delta2)
+        expected = np.einsum("bi,bij,bj->b", n_c, delta2, n_c)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        d_o = observed / n
+        d_e = expected / (n * (n - 1))
+        alpha = 1.0 - d_o / d_e
+    alpha[(n < 2) | ~(d_e > 0)] = np.nan
+    return np.asarray(alpha, dtype=float)
+
+
+# -- coders and two-way schemes ------------------------------------------------------
+
+
+def coder_onehot(sample: StudySample, name: str) -> FloatArray:
+    """The ratings of one estimate as a units x coders x values one-hot array."""
+    inp = sample.inputs[name]
+    onehot = np.zeros((sample.n_units, sample.n_coders, len(inp.values)))
+    onehot[inp.unit_idx, inp.coder_idx, inp.value_idx] = 1.0
+    return onehot
+
+
+def draw_coder_weights(rng: np.random.Generator, n_coders: int, n: int) -> npt.NDArray[np.int64]:
+    """How often each coder is drawn in each of ``n`` resamples (n x coders)."""
+    return rng.multinomial(n_coders, np.full(n_coders, 1.0 / n_coders), size=n)
+
+
+def two_way_alphas(
+    onehot: FloatArray,
+    unit_weights: npt.ArrayLike | None,
+    coder_weights: npt.ArrayLike,
+    values: tuple[Any, ...],
+    distance: Distance,
+) -> FloatArray:
+    """Alpha for each replicate of unit weights (None: all 1) and coder weights.
+
+    A coder drawn v times contributes v copies of each of its values, but pairs
+    between copies of one coder are left out: a copy agrees perfectly with
+    itself. Unit u then contributes ``(m_u / P_u) (n_u n_u' - diag S_u)``, where
+    ``n_u`` counts the copies of each value, ``S_u`` the squared multiplicities,
+    ``m_u`` all copies and ``P_u = m_u² - sum(S_u)`` the ordered pairs between
+    different coders. With weights of 0 or 1 this is Krippendorff's per-unit
+    ``(n_u n_u' - diag n_u) / (m_u - 1)``.
+    """
+    v = np.atleast_2d(np.asarray(coder_weights, dtype=float))
+    n_units, _, n_values = onehot.shape
+    w = (
+        np.ones((len(v), n_units))
+        if unit_weights is None
+        else np.atleast_2d(np.asarray(unit_weights, dtype=float))
+    )
+    out = np.empty(len(v))
+    per_replicate = max(n_units * n_values * 2, n_values * n_values, 1)
+    batch = max(1, BATCH_FLOATS // per_replicate)
+    for start in range(0, len(v), batch):
+        vb, wb = v[start : start + batch], w[start : start + batch]
+        counts = np.einsum("ujc,rj->ruc", onehot, vb)
+        squares = np.einsum("ujc,rj->ruc", onehot, vb * vb)
+        m = counts.sum(axis=2)
+        pairs = m * m - squares.sum(axis=2)
         with np.errstate(divide="ignore", invalid="ignore"):
-            d_o = observed / n
-            d_e = expected / (n * (n - 1))
-            alpha = 1.0 - d_o / d_e
-        alpha[(n < 2) | ~(d_e > 0)] = np.nan
-        out[start : start + len(wb)] = alpha
+            scale = np.where(pairs > 0, wb * m / pairs, 0.0)
+        o = np.einsum("ru,ruc,rud->rcd", scale, counts, counts)
+        diagonal = np.einsum("ru,ruc->rc", scale, squares)
+        o[:, np.arange(n_values), np.arange(n_values)] -= diagonal
+        out[start : start + len(vb)] = alphas_from_coincidences(o, values, distance)
     return out
 
 
@@ -476,6 +573,51 @@ def bootstrap(
             )
         notes.append(KALPHA_NOTE)
         level_used, n_clusters = None, None
+    elif scheme in ("coders", "two_way"):
+        if method == "bca":
+            raise DesignError(
+                f"BCa intervals are available with scheme='units' only; scheme='{scheme}' "
+                "uses percentile intervals"
+            )
+        if sample.n_coders < MIN_CODERS:
+            raise DesignError(
+                f"scheme='{scheme}' resamples coders and needs at least {MIN_CODERS}; this "
+                f"study has {sample.n_coders}"
+            )
+        rng = np.random.default_rng(seed)
+        if scheme == "coders":
+            if level is not None or strata:
+                raise DesignError(
+                    "the coders scheme holds the units fixed; leave level and strata unset, "
+                    "or use scheme='two_way' to resample units and coders"
+                )
+            level_used, n_clusters, unit_weights = None, None, None
+            notes.append(CODERS_NOTE.format(n_coders=sample.n_coders))
+        else:
+            level_used, level_warning = _resolve_level(sample, level)
+            if level_warning:
+                recorded.append(emit(BootstrapWarning, level_warning, stacklevel=3))
+            plan = cluster_plan(sample, level_used, strata)
+            n_clusters = plan.n_clusters
+            unit_weights = draw_weights(rng, plan, n_resamples)[:, plan.cluster_of_unit]
+            within = " within strata" if strata else ""
+            notes.append(
+                TWO_WAY_NOTE.format(level=level_used, within=within, n_coders=sample.n_coders)
+            )
+        coder_weights = draw_coder_weights(rng, sample.n_coders, n_resamples)
+        for name in names:
+            distribution = two_way_alphas(
+                coder_onehot(sample, name),
+                unit_weights,
+                coder_weights,
+                sample.inputs[name].values,
+                sample.distance,
+            )
+            intervals[name] = percentile_interval(
+                name, points[name], distribution, confidence, alpha_min
+            )
+        if len(names) > 1:
+            notes.append("All estimates use the same resamples, so their intervals are paired.")
     else:
         level_used, level_warning = _resolve_level(sample, level)
         if level_warning:
@@ -533,6 +675,85 @@ def bootstrap(
         intervals=intervals,
         warnings=tuple(recorded),
         notes=tuple(notes),
+        provenance=result.provenance,
+        n_coders=sample.n_coders if scheme in ("coders", "two_way") else None,
+    )
+
+
+def coder_jackknife(
+    result: AlphaResult, sample: StudySample, *, confidence: float
+) -> JackknifeResult:
+    """Leave-one-coder-out alphas, jackknife standard errors and t intervals.
+
+    See :meth:`AlphaResult.coder_jackknife`.
+    """
+    _check_options(1, confidence, "percentile", None)
+    m = sample.n_coders
+    if m < MIN_CODERS:
+        raise DesignError(
+            f"the coder jackknife leaves one coder out and needs at least {MIN_CODERS} "
+            f"coders; this study has {m}"
+        )
+    t = float(stats.t.ppf(1 - (1 - confidence) / 2, m - 1))
+    intervals: dict[str, Interval] = {}
+    errors: dict[str, float] = {}
+    rows = []
+    for name, inp in sample.inputs.items():
+        point = result.estimates[name].alpha
+        without = np.empty(m)
+        for j in range(m):
+            keep = inp.coder_idx != j
+            computed = compute_alpha(
+                inp.unit_idx[keep], inp.value_idx[keep], sample.n_units, inp.values, sample.distance
+            )
+            without[j] = computed.components.alpha
+            rows.append(
+                {
+                    "estimate": name,
+                    "coder": sample.coder_names[j],
+                    "units_rated": int(np.unique(inp.unit_idx[~keep]).size),
+                    "alpha_without": without[j],
+                    "influence": point - without[j],
+                }
+            )
+        undefined = np.isnan(without)
+        if undefined.any():
+            missing = preview(sample.coder_names[undefined])
+            intervals[name] = Interval(
+                name,
+                point,
+                np.nan,
+                np.nan,
+                m,
+                int(undefined.sum()),
+                undefined_reason=f"alpha is undefined without coders {missing}",
+                distribution=without,
+            )
+            errors[name] = np.nan
+            continue
+        se = float(np.sqrt((m - 1) / m * np.sum((without - without.mean()) ** 2)))
+        errors[name] = se
+        # Alpha cannot exceed 1, so the upper end is capped there.
+        intervals[name] = Interval(
+            name, point, point - t * se, min(point + t * se, 1.0), m, 0, distribution=without
+        )
+    recorded = _interval_warnings(intervals, m, replicates=False)
+    return JackknifeResult(
+        confidence=confidence,
+        n_coders=m,
+        design=result.design,
+        measurement=result.measurement,
+        intervals=intervals,
+        standard_errors=errors,
+        influence=pd.DataFrame(rows),
+        warnings=tuple(recorded),
+        notes=(
+            f"Coder jackknife: alpha is recomputed {m} times, each time without one coder. "
+            "The standard error measures how much alpha depends on which coders were "
+            f"sampled, with the units held fixed; the interval uses t with {m - 1} degrees "
+            "of freedom. The influence of a coder is alpha minus alpha without that coder: "
+            "a large positive value means the coder raises agreement.",
+        ),
         provenance=result.provenance,
     )
 
@@ -702,12 +923,16 @@ def _seed(random_state: int | np.random.Generator | None) -> int:
 
 
 def _interval_warnings(
-    intervals: Mapping[str, Interval], n_resamples: int
+    intervals: Mapping[str, Interval], n_resamples: int, replicates: bool = True
 ) -> list[RecordedWarning]:
-    """Warn about undefined replicates (counted, left out) and about missing intervals."""
+    """Warn about undefined replicates (counted, left out) and about missing intervals.
+
+    ``replicates=False`` (the jackknife) skips the first: there an undefined
+    leave-one-out alpha leaves no interval at all.
+    """
     found = []
     failed = {name: i.n_failed for name, i in intervals.items() if i.n_failed}
-    if failed:
+    if failed and replicates:
         counts = ", ".join(f"{name} {count}" for name, count in failed.items())
         found.append(
             emit(
