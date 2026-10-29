@@ -74,7 +74,7 @@ DESIGN_NOTES: dict[Design, str] = {
 }
 
 _NOT_YET: dict[Design, str] = {
-    Design.HUMAN_LLM_ALIGNMENT: "human-LLM alignment (mixed panels) is planned for v0.2",
+    Design.HUMAN_LLM_ALIGNMENT: "human-LLM alignment (mixed panels) is planned for v1.0",
     Design.CONFIGURATION_CHANGE: (
         "configuration_change is a paired comparison, not a single-alpha design: declare the "
         "design each configuration is measured under and call study.compare(a=..., b=...)"
@@ -188,7 +188,7 @@ def check_design(
     if is_llm.any() and not is_llm.all():
         raise DesignError(
             f"the ratings mix {int((~is_llm).sum())} human rows and {int(is_llm.sum())} LLM "
-            "rows; mixed human-LLM panels are planned for v0.2. Filter the ratings to one kind."
+            "rows; mixed human-LLM panels are planned for v1.0. Filter the ratings to one kind."
         )
     if design is Design.HUMAN_PANEL and is_llm.any():
         raise DesignError("human_panel was declared but the rows carry a model_id (LLM rows)")

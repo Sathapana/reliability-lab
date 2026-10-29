@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A [roadmap](docs/design/roadmap.md) for 0.2 to 1.0. Mixed human-LLM panels move from 0.2 to 1.0, and the messages refusing them say so.
+
 ## 0.1.4
 
 All six of Krippendorff's difference functions.
