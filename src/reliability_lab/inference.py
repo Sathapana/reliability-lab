@@ -23,15 +23,14 @@ configurations, so the interval falls on the difference alpha_b - alpha_a.
 
 from __future__ import annotations
 
-import warnings
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-from scipy import sparse, stats
+from scipy import sparse, special, stats
 
 from reliability_lab.alpha import ORDINAL, Distance, compute_alpha, per_unit_coincidences
 from reliability_lab.data import preview
@@ -218,14 +217,38 @@ def replicate_alphas(
     distance: Distance,
 ) -> FloatArray:
     """Alpha for each row of cluster weights; NaN where alpha is undefined."""
-    w = np.atleast_2d(np.asarray(weights, dtype=float))
+    w = np.atleast_2d(np.asarray(weights))
     n_values = len(values)
+    n_flat = n_values * n_values
+    # A dense product is one BLAS call; large value domains stay sparse.
+    dense = clusters.shape[0] * n_flat <= BATCH_FLOATS
+    contributions = clusters.toarray() if dense else sparse.csr_array(clusters.T)
     out = np.empty(len(w))
-    batch = max(1, BATCH_FLOATS // max(n_values * n_values, 1))
+    batch = max(1, BATCH_FLOATS // max(n_flat, clusters.shape[0], 1))
     for start in range(0, len(w), batch):
-        wb = w[start : start + batch]
-        o = np.asarray(clusters.T @ wb.T, dtype=float).T.reshape(len(wb), n_values, n_values)
+        wb = np.asarray(w[start : start + batch], dtype=float)
+        if dense:
+            flat = wb @ contributions
+        else:
+            flat = np.asarray(contributions @ np.asfortranarray(wb.T)).T
+        o = flat.reshape(len(wb), n_values, n_values)
         out[start : start + len(wb)] = alphas_from_coincidences(o, values, distance)
+    return out
+
+
+def jackknife_alphas(
+    clusters: sparse.csr_array, values: tuple[Any, ...], distance: Distance
+) -> FloatArray:
+    """Alpha without each cluster in turn: the coincidences less that cluster's."""
+    n_values = len(values)
+    n_flat = n_values * n_values
+    total = np.asarray(clusters.sum(axis=0), dtype=float).ravel()
+    out = np.empty(clusters.shape[0])
+    batch = max(1, BATCH_FLOATS // max(n_flat, 1))
+    for start in range(0, clusters.shape[0], batch):
+        part = clusters[start : start + batch].toarray()
+        o = (total - part).reshape(len(part), n_values, n_values)
+        out[start : start + len(part)] = alphas_from_coincidences(o, values, distance)
     return out
 
 
@@ -285,25 +308,26 @@ def two_way_alphas(
     ``(n_u n_u' - diag n_u) / (m_u - 1)``.
     """
     v = np.atleast_2d(np.asarray(coder_weights, dtype=float))
-    n_units, _, n_values = onehot.shape
-    w = (
-        np.ones((len(v), n_units))
-        if unit_weights is None
-        else np.atleast_2d(np.asarray(unit_weights, dtype=float))
-    )
+    n_units, n_coders, n_values = onehot.shape
+    w = None if unit_weights is None else np.atleast_2d(np.asarray(unit_weights))
+    # Every sum over coders is a matrix product with the coder weights.
+    by_coder = onehot.transpose(1, 0, 2).reshape(n_coders, n_units * n_values)
+    rated = onehot.sum(axis=2).T
     out = np.empty(len(v))
     per_replicate = max(n_units * n_values * 2, n_values * n_values, 1)
     batch = max(1, BATCH_FLOATS // per_replicate)
     for start in range(0, len(v), batch):
-        vb, wb = v[start : start + batch], w[start : start + batch]
-        counts = np.einsum("ujc,rj->ruc", onehot, vb)
-        squares = np.einsum("ujc,rj->ruc", onehot, vb * vb)
-        m = counts.sum(axis=2)
-        pairs = m * m - squares.sum(axis=2)
+        vb = v[start : start + batch]
+        v2 = vb * vb
+        wb = 1.0 if w is None else np.asarray(w[start : start + batch], dtype=float)
+        counts = (vb @ by_coder).reshape(len(vb), n_units, n_values)
+        squares = (v2 @ by_coder).reshape(len(vb), n_units, n_values)
+        m = vb @ rated
+        pairs = m * m - v2 @ rated
         with np.errstate(divide="ignore", invalid="ignore"):
             scale = np.where(pairs > 0, wb * m / pairs, 0.0)
-        o = np.einsum("ru,ruc,rud->rcd", scale, counts, counts)
-        diagonal = np.einsum("ru,ruc->rc", scale, squares)
+        o = (counts * scale[:, :, None]).transpose(0, 2, 1) @ counts
+        diagonal = (scale[:, None, :] @ squares)[:, 0, :]
         o[:, np.arange(n_values), np.arange(n_values)] -= diagonal
         out[start : start + len(vb)] = alphas_from_coincidences(o, values, distance)
     return out
@@ -389,12 +413,14 @@ def kalpha_replicates(pool: KalphaPool, draws: IntArray, redraws: IntArray) -> F
     ``redraws`` (replicates x len(second_pick)) replaces a unit's second draw when
     it repeats the first.
     """
-    d = np.array(draws, dtype=np.intp)
-    if len(pool.second_pick):
-        first = d[:, pool.second_pick - 1]
-        second = d[:, pool.second_pick]
-        d[:, pool.second_pick] = np.where(first == second, redraws, second)
-    alpha = 1.0 - (pool.errors[d] * pool.weights).sum(axis=1)
+    d = np.asarray(draws, dtype=np.intp)
+    sp = pool.second_pick
+    alpha = 1.0 - np.take(pool.errors, d) @ pool.weights
+    if len(sp):
+        # Repeats are rare, so their redraws correct the sums afterwards.
+        rows, cols = np.nonzero(d[:, sp - 1] == d[:, sp])
+        redrawn = pool.errors[np.asarray(redraws)[rows, cols]] - pool.errors[d[rows, sp[cols]]]
+        np.subtract.at(alpha, rows, redrawn * pool.weights[sp[cols]])
     return np.asarray(np.maximum(alpha, -1.0), dtype=float)
 
 
@@ -452,42 +478,63 @@ def percentile_interval(
 def bca_interval(
     name: str,
     point: float,
-    statistic: Callable[[IntArray], FloatArray],
-    n_clusters: int,
-    n_resamples: int,
+    distribution: FloatArray,
+    theta_hat: float,
+    jackknife: FloatArray,
     confidence: float,
-    seed: int,
     alpha_min: float | None = None,
 ) -> Interval:
-    """BCa interval through ``scipy.stats.bootstrap`` over resampled cluster indices."""
+    """BCa interval (Efron and Tibshirani 1993, 14.3 and 15.4), as ``scipy.stats.bootstrap`` does.
 
-    def vectorised(idx: IntArray, axis: int = -1) -> FloatArray:
-        return statistic(np.moveaxis(np.asarray(idx, dtype=np.intp), axis, -1))
-
-    # scipy's own warning about a degenerate BCa is replaced by this library's
-    # BootstrapWarning, which names the estimate and the fallback.
-    with np.errstate(divide="ignore", invalid="ignore"), warnings.catch_warnings():
-        warnings.simplefilter("ignore", stats.DegenerateDataWarning)
-        res = stats.bootstrap(
-            (np.arange(n_clusters),),
-            vectorised,
-            n_resamples=n_resamples,
-            confidence_level=confidence,
-            method="BCa",
-            vectorized=True,
-            rng=np.random.default_rng(seed),
-        )
-    distribution = np.asarray(res.bootstrap_distribution, dtype=float)
+    ``theta_hat`` is the statistic on the full sample, computed like the replicates,
+    and ``jackknife`` the statistic without each cluster in turn.
+    """
+    n_resamples = len(distribution)
     failed = np.isnan(distribution)
-    low, high = float(res.confidence_interval.low), float(res.confidence_interval.high)
-    reason = None
-    if not (np.isfinite(low) and np.isfinite(high)):
-        reason = "the BCa interval is undefined (undefined replicates or a degenerate jackknife)"
+    z_alpha = float(special.ndtri((1.0 - confidence) / 2.0))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        below_hat = (distribution < theta_hat).sum() + (distribution <= theta_hat).sum()
+        z0 = special.ndtri(below_hat / (2 * n_resamples))
+        u = jackknife.mean() - jackknife
+        a_hat = (u**3).sum() / (6.0 * (u**2).sum() ** 1.5)
+        num = z0 + np.array([z_alpha, -z_alpha])
+        levels = special.ndtr(z0 + num / (1.0 - a_hat * num))
+    low = high = np.nan
+    reason: str | None = (
+        "the BCa interval is undefined (undefined replicates or a degenerate jackknife)"
+    )
+    if not failed.any() and np.isfinite(levels).all():
+        low, high = (float(q) for q in np.quantile(distribution, levels))
+        reason = None
     defined = distribution[~failed]
     below = float((defined < alpha_min).mean()) if alpha_min is not None and len(defined) else None
     return Interval(
         name, point, low, high, n_resamples, int(failed.sum()), below, reason, distribution
     )
+
+
+def bca_weights(seed: int, n_clusters: int, n_resamples: int) -> npt.NDArray[np.int64]:
+    """Cluster weights of the BCa resamples (n x clusters).
+
+    The indices are the ones ``scipy.stats.bootstrap`` draws from the same seed,
+    drawn in batches (which leaves the stream unchanged) and counted.
+    """
+    rng = np.random.default_rng(seed)
+    batch = max(1, BATCH_FLOATS // max(n_clusters, 1))
+    parts = []
+    for start in range(0, n_resamples, batch):
+        size = min(batch, n_resamples - start)
+        idx = rng.integers(0, n_clusters, (size, n_clusters))
+        parts.append(weights_from_indices(idx, n_clusters))
+    return np.concatenate(parts)
+
+
+def bca_parts(
+    clusters: sparse.csr_array, values: tuple[Any, ...], distance: Distance
+) -> tuple[float, FloatArray]:
+    """The full-sample statistic and the leave-one-cluster-out jackknife for BCa."""
+    theta_hat = replicate_alphas(clusters, np.ones(clusters.shape[0]), values, distance)[0]
+    return float(theta_hat), jackknife_alphas(clusters, values, distance)
 
 
 def weights_from_indices(idx: IntArray, n_clusters: int) -> npt.NDArray[np.int64]:
@@ -496,17 +543,6 @@ def weights_from_indices(idx: IntArray, n_clusters: int) -> npt.NDArray[np.int64
     offsets = (np.arange(len(flat)) * n_clusters)[:, None]
     counts = np.bincount((flat + offsets).ravel(), minlength=len(flat) * n_clusters)
     return counts.reshape(len(flat), n_clusters)
-
-
-def _alpha_statistic(
-    clusters: sparse.csr_array, n_clusters: int, values: tuple[Any, ...], distance: Distance
-) -> Callable[[IntArray], FloatArray]:
-    def statistic(idx: IntArray) -> FloatArray:
-        lead = np.shape(idx)[:-1]
-        w = weights_from_indices(idx, n_clusters)
-        return replicate_alphas(clusters, w, values, distance).reshape(lead)
-
-    return statistic
 
 
 # -- entry points ---------------------------------------------------------------------
@@ -624,35 +660,27 @@ def bootstrap(
             recorded.append(emit(BootstrapWarning, level_warning, stacklevel=3))
         if method == "bca" and strata:
             raise DesignError(
-                "BCa intervals cannot resample within strata (scipy.stats.bootstrap has no "
-                "strata); use method='percentile'"
+                "BCa intervals cannot resample within strata; use method='percentile'"
             )
         plan = cluster_plan(sample, level_used, strata)
         n_clusters = plan.n_clusters
         weights = (
             draw_weights(np.random.default_rng(seed), plan, n_resamples)
             if method == "percentile"
-            else None
+            else bca_weights(seed, n_clusters, n_resamples)
         )
         for name in names:
             values = sample.inputs[name].values
             clusters = cluster_coincidences(sample, name, plan)
-            if weights is not None:
-                distribution = replicate_alphas(clusters, weights, values, sample.distance)
+            distribution = replicate_alphas(clusters, weights, values, sample.distance)
+            if method == "percentile":
                 intervals[name] = percentile_interval(
                     name, points[name], distribution, confidence, alpha_min
                 )
             else:
-                statistic = _alpha_statistic(clusters, n_clusters, values, sample.distance)
+                theta_hat, jackknife = bca_parts(clusters, values, sample.distance)
                 intervals[name] = bca_interval(
-                    name,
-                    points[name],
-                    statistic,
-                    n_clusters,
-                    n_resamples,
-                    confidence,
-                    seed,
-                    alpha_min,
+                    name, points[name], distribution, theta_hat, jackknife, confidence, alpha_min
                 )
         notes.append(UNITS_NOTE.format(level=level_used, within=" within strata" if strata else ""))
         if len(names) > 1:
@@ -795,7 +823,7 @@ def compare(
     weights = (
         draw_weights(np.random.default_rng(seed), plan_a, n_resamples)
         if method == "percentile"
-        else None
+        else bca_weights(seed, plan_a.n_clusters, n_resamples)
     )
 
     arm_intervals: dict[str, dict[str, Interval]] = {"a": {}, "b": {}}
@@ -806,30 +834,22 @@ def compare(
         clusters_a = cluster_coincidences(sample_a, name, plan_a)
         clusters_b = cluster_coincidences(sample_b, name, plan_b)
         values_a, values_b = sample_a.inputs[name].values, sample_b.inputs[name].values
-        if weights is not None:
-            dist_a = replicate_alphas(clusters_a, weights, values_a, sample_a.distance)
-            dist_b = replicate_alphas(clusters_b, weights, values_b, sample_b.distance)
+        dist_a = replicate_alphas(clusters_a, weights, values_a, sample_a.distance)
+        dist_b = replicate_alphas(clusters_b, weights, values_b, sample_b.distance)
+        if method == "percentile":
             arm_intervals["a"][name] = percentile_interval(name, point_a, dist_a, confidence)
             arm_intervals["b"][name] = percentile_interval(name, point_b, dist_b, confidence)
             differences[name] = percentile_interval(
                 name, point_b - point_a, dist_b - dist_a, confidence
             )
             continue
-        k = plan_a.n_clusters
-        stat_a = _alpha_statistic(clusters_a, k, values_a, sample_a.distance)
-        stat_b = _alpha_statistic(clusters_b, k, values_b, sample_b.distance)
-
-        def stat_diff(
-            idx: IntArray,
-            stat_a: Callable[[IntArray], FloatArray] = stat_a,
-            stat_b: Callable[[IntArray], FloatArray] = stat_b,
-        ) -> FloatArray:
-            return stat_b(idx) - stat_a(idx)
-
-        args = (k, n_resamples, confidence, seed)
-        arm_intervals["a"][name] = bca_interval(name, point_a, stat_a, *args)
-        arm_intervals["b"][name] = bca_interval(name, point_b, stat_b, *args)
-        differences[name] = bca_interval(name, point_b - point_a, stat_diff, *args)
+        theta_a, jack_a = bca_parts(clusters_a, values_a, sample_a.distance)
+        theta_b, jack_b = bca_parts(clusters_b, values_b, sample_b.distance)
+        arm_intervals["a"][name] = bca_interval(name, point_a, dist_a, theta_a, jack_a, confidence)
+        arm_intervals["b"][name] = bca_interval(name, point_b, dist_b, theta_b, jack_b, confidence)
+        differences[name] = bca_interval(
+            name, point_b - point_a, dist_b - dist_a, theta_b - theta_a, jack_b - jack_a, confidence
+        )
 
     recorded.extend(_interval_warnings(differences, n_resamples))
     within = " within strata" if strata else ""

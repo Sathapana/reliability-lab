@@ -1,12 +1,22 @@
 import json
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import pytest
 from reference import reference_alpha
+from scipy import stats
 
 from reliability_lab import DesignError, RatingFrame, ReliabilityStudy
+from reliability_lab.inference import (
+    ClusterPlan,
+    StudySample,
+    cluster_coincidences,
+    cluster_plan,
+    replicate_alphas,
+    weights_from_indices,
+)
 
 pytestmark = pytest.mark.filterwarnings("ignore::reliability_lab.CategorySkewWarning")
 
@@ -135,3 +145,44 @@ def test_bca_comparison() -> None:
     assert not [w for w in diff.warnings if w.category == "BootstrapWarning"]
     d = diff["as_missing"]
     assert d.low <= d.point <= d.high
+
+
+def test_bca_comparison_matches_direct_scipy_calls() -> None:
+    diff = study_of(panel_matrix()).compare(A, B, method="bca", n_resamples=500, random_state=2)
+    sample_a, sample_b = diff.result_a._sample, diff.result_b._sample
+    assert sample_a is not None and sample_b is not None
+    plan_a = cluster_plan(sample_a, "unit", strata=False)
+    plan_b = cluster_plan(sample_b, "unit", strata=False, universe=plan_a.labels)
+    k = plan_a.n_clusters
+
+    def arm(sample: StudySample, plan: ClusterPlan) -> Callable[[np.ndarray], np.ndarray]:
+        clusters = cluster_coincidences(sample, "as_missing", plan)
+        values = sample.inputs["as_missing"].values
+
+        def statistic(idx: np.ndarray, axis: int = -1) -> np.ndarray:
+            idx = np.moveaxis(idx, axis, -1)
+            w = weights_from_indices(idx, k)
+            return replicate_alphas(clusters, w, values, sample.distance).reshape(idx.shape[:-1])
+
+        return statistic
+
+    stat_a, stat_b = arm(sample_a, plan_a), arm(sample_b, plan_b)
+
+    def stat_diff(idx: np.ndarray, axis: int = -1) -> np.ndarray:
+        return stat_b(idx, axis) - stat_a(idx, axis)
+
+    for statistic, interval in [
+        (stat_a, diff.arm_a["as_missing"]),
+        (stat_b, diff.arm_b["as_missing"]),
+        (stat_diff, diff["as_missing"]),
+    ]:
+        direct = stats.bootstrap(
+            (np.arange(k),),
+            statistic,
+            n_resamples=500,
+            method="BCa",
+            vectorized=True,
+            rng=np.random.default_rng(2),
+        )
+        assert interval.low == pytest.approx(direct.confidence_interval.low)
+        assert interval.high == pytest.approx(direct.confidence_interval.high)

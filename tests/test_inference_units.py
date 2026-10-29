@@ -76,6 +76,24 @@ def test_vectorised_units_scheme_matches_naive_loop(level: str, resample: str) -
     np.testing.assert_allclose(fast, slow, atol=1e-12, equal_nan=True)
 
 
+@pytest.mark.parametrize("level", LEVELS)
+def test_sparse_batched_product_matches_naive_loop(
+    level: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A tiny budget keeps the cluster contributions sparse, with a few replicates per batch.
+    monkeypatch.setattr("reliability_lab.inference.BATCH_FLOATS", 50)
+    matrix, study = nested_study(level)
+    sample = study.alpha()._sample
+    assert sample is not None
+    plan = cluster_plan(sample, "unit", strata=False)
+    weights = draw_weights(np.random.default_rng(11), plan, 40)
+    clusters = cluster_coincidences(sample, "as_missing", plan)
+    fast = replicate_alphas(clusters, weights, sample.inputs["as_missing"].values, sample.distance)
+    mapping = {int(label): i for i, label in enumerate(sample.unit_labels)}
+    slow = naive_units_alphas(matrix, level, VALUES, mapping, weights)
+    np.testing.assert_allclose(fast, slow, atol=1e-12, equal_nan=True)
+
+
 def test_custom_marginal_dependent_distance_matches_naive_loop() -> None:
     custom = Distance("my_ordinal", ORDINAL.fn, depends_on_marginals=True)
     matrix, study = nested_study(custom)

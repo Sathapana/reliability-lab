@@ -44,6 +44,7 @@ parquet = ["pyarrow>=15"]
 [project.urls]
 Repository = "https://github.com/Sathapana/reliability-lab"
 Issues = "https://github.com/Sathapana/reliability-lab/issues"
+Changelog = "https://github.com/Sathapana/reliability-lab/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
