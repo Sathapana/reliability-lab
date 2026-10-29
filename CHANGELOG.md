@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.4
+
+All six of Krippendorff's difference functions.
+
 - Two more built-in distances from Krippendorff (2011):
   - `measurement="bipolar"` is for scales with two poles, such as −3…+3. Its poles are the smallest and largest declared values.
   - `measurement=circular(U)` is for values on a circle of circumference U: hours (24), degrees (360), months (12). U must be declared, so the string `"circular"` is refused.
