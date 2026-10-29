@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.2
+
 Generalising over coders.
 
 - Two new bootstrap schemes:
