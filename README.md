@@ -134,6 +134,7 @@ diff = study.compare(
     b={"condition_id": "distilled"},  # candidate
     margin=0.03,
     test="non_inferiority",  # or "equivalence"
+    confidence=0.96,  # a test that holds 2.5% at the margin
     n_resamples=2000,
     random_state=7,
 )
@@ -141,10 +142,10 @@ diff.verdicts["as_missing"]  # "non_inferior", "inferior" or "inconclusive"
 diff.p_values["as_missing"]
 ```
 
-- **Non-inferiority** reads the lower end of the interval: `non_inferior` when it is above −margin. At the default 95% this is a one-sided test at 2.5%.
+- **Non-inferiority** reads the lower end of the interval: `non_inferior` when it is above −margin. At the default 95% this states a one-sided test at 2.5%. In simulation it rejected 2.9% of the time when the true difference sat on the margin, and up to 3.75% in one scenario. `confidence=0.96` held 2.5%. See [Comparing two configurations](https://github.com/Sathapana/reliability-lab/blob/main/docs/guidance/bootstrap-coverage.md#comparing-two-configurations).
 - **Equivalence** reads both ends: `equivalent` when the interval lies inside (−margin, margin). These are two one-sided tests, so a 5% equivalence test uses `confidence=0.90`.
 - Every missing-data policy gets its own verdict, and an undefined interval is `inconclusive`. Each p-value inverts the interval its verdict reads, so the two never disagree.
-- Fix the margin before looking at the results.
+- Fix the margin before looking at the results. Small margins need many units: at a margin of 0.05, 500 units gave 31–67% power when the two configurations were equally reliable.
 
 ## Splits and reports
 

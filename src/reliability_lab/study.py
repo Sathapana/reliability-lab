@@ -512,7 +512,9 @@ class ReliabilityStudy:
 
         - ``"non_inferiority"``: ``non_inferior`` when the lower end is above
           -margin, ``inferior`` when the upper end is below it, otherwise
-          ``inconclusive``. At ``confidence=0.95`` this is a one-sided test at 2.5%.
+          ``inconclusive``. At ``confidence=0.95`` this states a one-sided test at
+          2.5%. In the simulations of ``docs/guidance/bootstrap-coverage.md`` it
+          rejected about 2.9% of the time at the margin; ``confidence=0.96`` held 2.5%.
         - ``"equivalence"``: ``equivalent`` when the interval lies inside
           (-margin, margin), ``not_equivalent`` when it lies outside
           [-margin, margin], otherwise ``inconclusive``. These are two one-sided

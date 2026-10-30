@@ -2,7 +2,7 @@
 
 # Bootstrap coverage: which interval to trust
 
-reliability-lab requires you to name a bootstrap scheme; there is no default. This page measures how often each scheme's 95% interval actually contains the true alpha, so you can choose one knowing what it does. The tables, charts and every number quoted in the text come from the committed runs in `simulations/results/` and `simulations/results/coders/`.
+reliability-lab requires you to name a bootstrap scheme; there is no default. This page measures how often each scheme's 95% interval actually contains the true alpha, so you can choose one knowing what it does. It also measures how often the non-inferiority verdict of `compare()` is wrong. The tables, charts and every number quoted in the text come from the committed runs in `simulations/results/`, `simulations/results/coders/` and `simulations/results/paired/`.
 
 ## Summary
 
@@ -17,6 +17,7 @@ reliability-lab requires you to name a bootstrap scheme; there is no default. Th
 - **KALPHA is too narrow whenever a unit holds more than one pair of values.** It covers 85–86% with three coders on nominal data, 77–80% on a 5-point ordinal scale, and 70–71% with five coders. With two coders, where each unit holds one pair, it covers 92–94%. Use it to reproduce published KALPHA intervals, not for new claims.
 - **Declare groups when units share a source.** Resampling units of clustered data one by one covers 89–91%. Resampling groups covers 91.8% with 20 clusters and 94.5% with 40.
 - **No interval repairs informative failures.** When failed attempts concentrate on hard units, dropping them raises alpha by about 0.03. The intervals cover that inflated value correctly, but not the complete-data alpha. Report the missing-data policies side by side, and read their spread as sensitivity to the policy, not as bounds.
+- **For a non-inferiority test that holds 2.5%, use `confidence=0.96`.** At the default 95%, `compare()` wrongly declares non-inferiority in 2.9% of runs at the margin, and up to 3.75% in one scenario. At 96% it does so in 2.4%, and at most 3.15%. Fix the margin first: at a margin of 0.05, even 500 units give 31–67% power when the configurations are equally reliable. See [Comparing two configurations](#comparing-two-configurations).
 
 ## Setup
 
@@ -204,6 +205,62 @@ Each cell gives the coverage of the interval's own claim, with the mean width in
 
 **Which coders drive alpha.** `result.coder_jackknife().influence` lists alpha without each coder, and each coder's influence. It shows whether one annotator, model or prompt drives the result. It describes the data; it is not a test of whether coders differ. Choose the claim, and so the interval, from the design, before looking at the results.
 
+## Comparing two configurations
+
+`study.compare()` resamples the units once and computes both configurations' alphas on every resample. The interval of the difference Δ = α_b − α_a therefore accounts for the units the two share. With a `margin` δ and `test="non_inferiority"`, it also gives a verdict: `non_inferior` when the lower end of the interval is above −δ. Reading one end of a two-sided interval at `confidence` is a one-sided test at level (1 − `confidence`) / 2, so the default 95% states a 2.5% test. This section measures how often the verdict is wrongly `non_inferior`, and how often it is rightly so.
+
+**Setup.**
+- **Paired arms.** Two configurations rate the same units, with the same true categories, hard units and clusters, as two judge configurations scoring one item set do. Arm a is the scenario above, with accuracy 0.8.
+- **Margin cells.** Arm b's accuracy is 0.765. The margin is set to −Δ, so the truth sits exactly on the boundary of the null hypothesis, and every `non_inferior` verdict is a false claim. That is 0.049–0.051 on nominal data and 0.024–0.025 on the ordinal scale, where guesses are near misses and alpha falls less.
+- **Equal cells.** Both arms have accuracy 0.8, so Δ = 0. The share of `non_inferior` verdicts at a margin is the test's power at that margin.
+- **Grid.** Nominal and 5-point ordinal data at n = 50, 100, 200 and 500, in both kinds of cell. Two more margin cells at n = 200: clusters of 5 units (groups declared), and failures concentrated on hard units.
+- **Truth.** Δ is the difference of population alphas, from 2,000,000 units rated by both arms, with failures treated as missing.
+
+Every replication is compared with percentile and BCa intervals at 95% and 96%, on the same 2,000 resamples.
+
+**Run.** 18 scenarios × 2,000 replications × 2,000 bootstrap resamples, seed 20261027, reliability-lab 0.1.5 (numpy 2.5.4, scipy 1.18.1, pandas 3.1.0); 71 minutes on 8 workers. The largest Monte Carlo error of a true difference is 0.0007, and a rejection rate near 2.5% has a Monte Carlo standard error of about 0.35%.
+
+| Scenario | Margin (= -Δ) | Percentile 95%: rejects | Percentile 96%: rejects | BCa 95%: rejects | BCa 96%: rejects | BCa 95%: coverage |
+| --- | --- | --- | --- | --- | --- | --- |
+| Nominal, 3 categories, n = 50 | 0.049 | 2.65% | 2.10% | 2.35% | 2.15% | 95.5% |
+| Nominal, 3 categories, n = 100 | 0.050 | 2.80% | 2.30% | 2.85% | 2.25% | 94.8% |
+| Nominal, 3 categories, n = 200 | 0.050 | 2.40% | 1.95% | 2.35% | 2.00% | 94.7% |
+| Nominal, 3 categories, n = 500 | 0.050 | 3.80% | 3.10% | 3.75% | 3.15% | 93.9% |
+| Ordinal 5-point, n = 50 | 0.025 | 2.90% | 2.45% | 3.50% | 2.90% | 94.0% |
+| Ordinal 5-point, n = 100 | 0.025 | 3.00% | 2.60% | 3.05% | 2.80% | 94.0% |
+| Ordinal 5-point, n = 200 | 0.024 | 2.75% | 1.80% | 2.70% | 1.90% | 93.5% |
+| Ordinal 5-point, n = 500 | 0.024 | 2.50% | 2.35% | 2.75% | 2.25% | 95.0% |
+| Clustered units, n = 200 | 0.049 | 2.85% | 2.15% | 2.50% | 2.00% | 94.5% |
+| Failures on hard units, n = 200 | 0.051 | 3.10% | 2.35% | 3.10% | 2.25% | 94.2% |
+
+- **At the default 95%, the test is slightly liberal.** Over the ten margin cells, BCa rejects 2.89% of the time against the stated 2.5%, and 3.75% in the worst cell (nominal, n = 500). Percentile intervals do the same: 2.88%, and 3.80% at worst.
+- **The excess is not a defect in the verdict.** The bootstrap standard error of the difference matches its true spread to within 1% on average, and the estimate is unbiased to within 0.08 standard errors in every cell. The difference is slightly heavy-tailed, and the bootstrap interval ends add a little more. The intervals miss about 0.25 points too often per tail, the slight undercoverage the single-alpha intervals also show above. It does not shrink consistently with more units in this grid.
+- **For a test that holds 2.5%, pass `confidence=0.96`.** That states a 2% test. BCa then rejects 2.4% of the time on average, and at most 3.15% in any cell, within Monte Carlo error of 2.5%. The reported interval is then a 96% interval, and the report records the confidence beside the verdict.
+- **Clusters and failures behave alike.** With groups declared, the clustered cell rejects 2.50% at 95% and 2.00% at 96%. With failures on hard units it rejects 3.10% and 2.25%. As for one alpha, the comparison is between the dropped-failure alphas of both arms, not their complete-data alphas.
+- **Verdicts and p-values agree with their intervals** in all 80,000 comparisons of the margin cells.
+- **Equivalence was not simulated.** Two one-sided tests at level γ read both ends of the interval at `confidence` = 1 − 2γ, so a 5% equivalence test uses `confidence=0.90`. Expect the same small per-tail excess, unmeasured at that level.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="figures/power_by_n-dark.png">
+  <img alt="Share of non-inferior verdicts from 96% BCa intervals when the two configurations are equally reliable, against the number of units, for margins 0.02, 0.05 and 0.1" src="figures/power_by_n-light.png" width="840">
+</picture>
+
+| Scenario | Alpha of each | BCa 96%, margin 0.02 | BCa 96%, margin 0.05 | BCa 96%, margin 0.1 | BCa 95%, margin 0.05 | Width (BCa, 96%) |
+| --- | --- | --- | --- | --- | --- | --- |
+| Nominal, 3 categories, n = 50 | 0.539 | 3.8% | 6.5% | 14.4% | 7.8% | 0.41 |
+| Nominal, 3 categories, n = 100 | 0.539 | 4.2% | 9.2% | 27.3% | 11.1% | 0.29 |
+| Nominal, 3 categories, n = 200 | 0.538 | 5.0% | 13.6% | 47.6% | 15.2% | 0.21 |
+| Nominal, 3 categories, n = 500 | 0.539 | 8.2% | 30.9% | 85.9% | 34.0% | 0.13 |
+| Ordinal 5-point, n = 50 | 0.781 | 5.3% | 12.8% | 33.0% | 14.2% | 0.28 |
+| Ordinal 5-point, n = 100 | 0.781 | 6.5% | 17.8% | 53.8% | 20.6% | 0.19 |
+| Ordinal 5-point, n = 200 | 0.781 | 8.5% | 33.4% | 86.2% | 37.2% | 0.13 |
+| Ordinal 5-point, n = 500 | 0.781 | 15.2% | 67.3% | 99.7% | 70.5% | 0.08 |
+
+- **Power depends on the margin far more than on the method.** When the configurations are equally reliable, BCa at 96% declares non-inferiority at a margin of 0.05 in 31% of runs at n = 500 on nominal data, and 67% on the ordinal scale. At a margin of 0.1 that rises to 86% and nearly 100%. A margin of 0.02 is out of reach in this grid: at most 15%.
+- **Ordinal alphas are easier to compare.** They are higher here (0.78 against 0.54) and less variable, so the 96% interval at n = 500 is 0.08 wide against 0.13.
+- **A rough guide.** Power at Δ = 0 reaches about 80% when the margin is about 0.7 times the width of the 96% interval. Run a pilot, read the width, and choose n accordingly.
+- **Fix the margin before looking at the results.** A margin chosen after seeing the interval cannot be wrong, and so says nothing. `compare()` records the margin and the test in the declarations, the provenance and the JSON report.
+
 ## Which scheme to use
 
 | Situation | Use | Why |
@@ -214,15 +271,17 @@ Each cell gives the coverage of the interval's own claim, with the mean width in
 | Fewer than about 30 clusters | group resampling, read as approximate | 92% coverage with 20 clusters |
 | Reproducing a published KALPHA interval | `scheme="kalpha"` | matches Krippendorff's algorithm; too narrow for new claims with 3 or more coders |
 | Comparing two configurations | `study.compare()` | units scheme on identical resamples (KALPHA has no paired form) |
+| A non-inferiority verdict on a configuration change | `study.compare(margin=..., test="non_inferiority", confidence=0.96)`, margin fixed in advance | at 95% the 2.5% test rejects 2.9% at the margin; at 96%, 2.4% |
 | Repeated runs of one judge configuration | `scheme="units"` | runs differ only by chance, so the interval already covers new runs |
 | Coders differ (annotators, models, prompts), and the claim is about coders like them | `scheme="two_way"`, with 10 coders or more | units covers 48–83% of that claim; `two_way` covers 92–98% |
 | These questions with other coders, or which coders drive alpha | `result.coder_jackknife()` | 94–96% coverage, and an influence table per coder; the `coders` bootstrap is too narrow |
 
 ## Limitations
 
-- **One family of processes.** These scenarios use one family of data-generating processes (know or guess, with difficulty), up to 20 coders, up to 200 units, nominal and 5-point ordinal data, and 95% intervals. Interval and ratio metrics were not simulated.
+- **One family of processes.** These scenarios use one family of data-generating processes (know or guess, with difficulty), up to 20 coders, up to 200 units (500 when comparing), nominal and 5-point ordinal data, and 95% intervals (also 96% when comparing). Interval and ratio metrics were not simulated.
+- **Comparisons differ in one way.** In the comparison grid, the two configurations differ only in accuracy, and the true difference at the margin is about −0.05 (nominal) or −0.025 (ordinal). Equivalence tests were not simulated.
 - **Coders differ in one way.** In the coder grid, coders differ in accuracy and in a favourite label. Two other kinds of difference were not simulated beyond the one ordinal scenario: coders who use a scale differently, and coders who are good on some kinds of question and poor on others. Every coder rates every question, and no attempts fail.
-- **Truth uncertainty.** The true alphas carry a Monte Carlo error of at most 0.0025, small next to interval widths of 0.07 and more.
+- **Truth uncertainty.** The true alphas carry a Monte Carlo error of at most 0.0025, small next to interval widths of 0.07 and more. The true differences carry at most 0.0007.
 - **BCa's undefined cases are real.** At n = 30 with an 80% category, one run in six produces no BCa interval.
 - **KALPHA's second pick.** KALPHA's result depends on reading its algorithm note as evalica does: a unit's second pick is redrawn when it repeats the first. Its coverage problem does not come from that detail. It comes from treating dependent pairs as independent.
 
@@ -231,6 +290,7 @@ Each cell gives the coverage of the interval's own claim, with the mean width in
 ```bash
 uv run python -m simulations.run_coverage --workers 8                 # about 20 minutes on 8 cores
 uv run python -m simulations.run_coverage --grid coders --workers 8  # about an hour on 8 cores
+uv run python -m simulations.run_coverage --grid paired --workers 8  # about 70 minutes on 8 cores
 uv run --group sim python -m simulations.report                       # tables, figures and this page
 ```
 
