@@ -31,6 +31,7 @@ Scheme = Literal["units", "kalpha", "coders", "two_way"]
 Level = Literal["unit", "group"]
 Method = Literal["percentile", "bca"]
 OnUndefined = Literal["nan", "percentile"]
+Test = Literal["non_inferiority", "equivalence"]
 
 
 @dataclass(frozen=True)
@@ -608,6 +609,11 @@ class ComparisonResult:
     configuration's own intervals from those same resamples, and ``result_a`` and
     ``result_b`` the arms' full alpha results. ``configuration_diff`` lists the trace
     fields whose values differ between the arms (None without a trace sidecar).
+
+    With a declared ``test`` and ``margin``, ``verdicts`` holds the decision each
+    difference interval supports (``non_inferior``, ``inferior``, ``equivalent``,
+    ``not_equivalent`` or ``inconclusive``) and ``p_values`` the p-value that
+    inverts the same interval; both are empty without a test.
     """
 
     claim: str
@@ -623,6 +629,10 @@ class ComparisonResult:
     warnings: tuple[RecordedWarning, ...]
     notes: tuple[str, ...]
     configuration_diff: Mapping[str, Mapping[str, list[Any]]] | None = None
+    margin: float | None = None
+    test: str | None = None
+    verdicts: Mapping[str, str] = field(default_factory=dict)
+    p_values: Mapping[str, float] = field(default_factory=dict)
 
     def __getitem__(self, name: str) -> Interval:
         return self.differences[name]
@@ -637,6 +647,8 @@ class ComparisonResult:
                 "alpha_b": self.arm_b[name].point,
             }
             row.update({f"diff_{k}": v for k, v in diff.summary_row().items() if k != "estimate"})
+            row["verdict"] = self.verdicts.get(name)
+            row["p_value"] = self.p_values.get(name)
             rows.append(row)
         return pd.DataFrame(rows)
 
@@ -671,6 +683,7 @@ class ComparisonResult:
             arm: None if res.provenance is None else res.provenance.to_dict()
             for arm, res in (("a", self.result_a), ("b", self.result_b))
         }
+        provenance["declarations"] = {"margin": self.margin, "test": self.test}
         return _jsonable(  # type: ignore[no-any-return]
             {
                 **_header("comparison-result"),
@@ -681,6 +694,10 @@ class ComparisonResult:
                 "design": self.design,
                 "measurement": self.measurement,
                 **self.arm_a.metadata(),
+                "test": self.test,
+                "margin": self.margin,
+                "verdicts": dict(self.verdicts),
+                "p_values": dict(self.p_values),
                 "differences": {
                     k: i.to_dict(include_distribution) for k, i in self.differences.items()
                 },
@@ -706,16 +723,24 @@ class ComparisonResult:
                 f"{k}: {v['a']} -> {v['b']}" for k, v in self.configuration_diff.items()
             )
             lines.append(f"configuration changes: {changed}")
-        lines += [
-            "",
+        if self.test is not None:
+            label = self.test.replace("_", "-")
+            lines.append(f"test: {label} at margin {self.margin:g}")
+        header = (
             f"{'estimate':<26}{'alpha_a':>9}{'alpha_b':>9}{'diff':>9}{'low':>9}{'high':>9}"
-            f"{'failed':>8}",
-        ]
+            f"{'failed':>8}"
+        )
+        if self.test is not None:
+            header += f"  {'verdict':<15}{'p':>7}"
+        lines += ["", header]
         for name, d in self.differences.items():
-            lines.append(
+            line = (
                 f"{name:<26}{_fmt(self.arm_a[name].point):>9}{_fmt(self.arm_b[name].point):>9}"
                 f"{_fmt(d.point):>9}{_fmt(d.low):>9}{_fmt(d.high):>9}{d.n_failed:>8}"
             )
+            if self.test is not None:
+                line += f"  {self.verdicts[name]:<15}{_fmt(self.p_values[name]):>7}"
+            lines.append(line)
         lines.extend(_interval_footnotes(self.differences.values()))
         _append_warnings_and_notes(lines, self.warnings, self.notes)
         return "\n".join(lines)

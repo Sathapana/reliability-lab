@@ -24,6 +24,7 @@ configurations, so the interval falls on the difference alpha_b - alpha_a.
 from __future__ import annotations
 
 import dataclasses
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -54,6 +55,7 @@ SCHEMES: tuple[str, ...] = ("units", "kalpha", "coders", "two_way")
 MIN_CODERS = 3
 METHODS: tuple[str, ...] = ("percentile", "bca")
 ON_UNDEFINED: tuple[str, ...] = ("nan", "percentile")
+TESTS: tuple[str, ...] = ("non_inferiority", "equivalence")
 LEVELS: tuple[str, ...] = ("unit", "group")
 #: Upper bound on the floats held per batch of replicates (bounds memory use).
 BATCH_FLOATS = 10_000_000
@@ -578,6 +580,86 @@ def with_fallback(
     return dataclasses.replace(fallback, fallback_reason=interval.undefined_reason)
 
 
+# -- non-inferiority and equivalence --------------------------------------------------
+
+
+def verdict(test: str, margin: float, interval: Interval) -> str:
+    """The decision a difference interval supports at its confidence.
+
+    Non-inferiority (H0: alpha_b - alpha_a <= -margin) reads the lower end;
+    equivalence (H0: |alpha_b - alpha_a| >= margin) reads both ends, as two
+    one-sided tests. An undefined interval decides nothing.
+    """
+    if not interval.defined:
+        return "inconclusive"
+    low, high = interval.low, interval.high
+    if test == "non_inferiority":
+        if low > -margin:
+            return "non_inferior"
+        return "inferior" if high < -margin else "inconclusive"
+    if -margin < low and high < margin:
+        return "equivalent"
+    return "not_equivalent" if high < -margin or low > margin else "inconclusive"
+
+
+#: The verdict each test reaches when it rejects its null hypothesis.
+REJECTS = {"non_inferiority": "non_inferior", "equivalence": "equivalent"}
+
+
+def decision_p_value(
+    test: str,
+    margin: float,
+    interval: Interval,
+    confidence: float,
+    bca: tuple[float, float] | None = None,
+) -> float:
+    """The p-value that inverts the interval the verdict reads.
+
+    It is the smallest one-sided level at which the interval's end clears the
+    margin, so the test rejects exactly when p < (1 - confidence) / 2. ``bca``
+    holds z0 and a_hat when the interval is BCa. Equivalence takes the larger of
+    its two one-sided p-values. NaN when the interval is undefined, or when the
+    BCa map from level to quantile is not monotone and cannot be inverted.
+    """
+    if not interval.defined:
+        return math.nan
+    replicates = interval.distribution[~np.isnan(interval.distribution)]
+    lower = _one_sided_p(replicates, -margin, confidence, bca)
+    if test == "non_inferiority":
+        return lower
+    # The upper end of an interval is minus the lower end of the negated replicates,
+    # whose BCa bias correction and acceleration change sign.
+    mirrored = None if bca is None else (-bca[0], -bca[1])
+    return max(lower, _one_sided_p(-replicates, -margin, confidence, mirrored))
+
+
+def _one_sided_p(
+    replicates: FloatArray, bound: float, confidence: float, bca: tuple[float, float] | None
+) -> float:
+    """The smallest one-sided level at which the lower end exceeds ``bound``."""
+    rank = _rank_at_most(np.sort(replicates), bound)
+    if bca is None or rank in (0.0, 1.0):
+        return rank
+    z0, a_hat = bca
+    t = float(special.ndtri(rank)) - z0
+    z_tail = float(special.ndtri((1.0 - confidence) / 2.0))
+    if not (1.0 + a_hat * t > 0 and 1.0 - a_hat * (z0 + z_tail) > 0):
+        return math.nan
+    return float(special.ndtr(t / (1.0 + a_hat * t) - z0))
+
+
+def _rank_at_most(ordered: FloatArray, bound: float) -> float:
+    """sup{u : Q(u) <= bound}, where Q is ``np.quantile``'s linear interpolation."""
+    n = len(ordered)
+    k = int(np.searchsorted(ordered, bound, side="right")) - 1  # last value <= bound
+    if k < 0:
+        return 0.0
+    if k >= n - 1:
+        return 1.0
+    step = (bound - ordered[k]) / (ordered[k + 1] - ordered[k])
+    return float((k + step) / (n - 1))
+
+
 def bca_weights(seed: int, n_clusters: int, n_resamples: int) -> npt.NDArray[np.int64]:
     """Cluster weights of the BCa resamples (n x clusters).
 
@@ -875,9 +957,12 @@ def compare(
     method: str,
     random_state: int | np.random.Generator | None,
     on_undefined: str = "nan",
+    margin: float | None = None,
+    test: str | None = None,
 ) -> ComparisonResult:
     """Paired intervals on alpha_b - alpha_a; see :meth:`ReliabilityStudy.compare`."""
     _check_options(n_resamples, confidence, method, None, on_undefined)
+    margin = _check_test(margin, test)
     sample_a, sample_b = result_a._sample, result_b._sample
     if sample_a is None or sample_b is None:
         raise DesignError("both arms must be results of ReliabilityStudy.alpha()")
@@ -905,6 +990,7 @@ def compare(
 
     arm_intervals: dict[str, dict[str, Interval]] = {"a": {}, "b": {}}
     differences: dict[str, Interval] = {}
+    bca_params: dict[str, tuple[float, float]] = {}
     for name in names:
         point_a = result_a.estimates[name].alpha
         point_b = result_b.estimates[name].alpha
@@ -944,15 +1030,26 @@ def compare(
             confidence,
             on_undefined,
         )
+        bca_params[name] = bca_parameters(dist_b - dist_a, theta_b - theta_a, jack_b - jack_a)
+
+    verdicts: dict[str, str] = {}
+    p_values: dict[str, float] = {}
+    if test is not None and margin is not None:
+        for name, interval in differences.items():
+            bca = bca_params.get(name) if interval.method_used == "bca" else None
+            verdicts[name] = verdict(test, margin, interval)
+            p_values[name] = decision_p_value(test, margin, interval, confidence, bca)
 
     recorded.extend(_interval_warnings(differences, n_resamples))
     within = " within strata" if strata else ""
-    notes = (
+    notes: tuple[str, ...] = (
         "Both configurations are evaluated on the same resampled "
         f"{level_used}s in every replicate{within}; the interval is on the difference "
         "alpha_b - alpha_a.",
         UNITS_NOTE.format(level=level_used, within=within),
     )
+    if test is not None:
+        notes += (_test_note(test, margin, confidence),)
 
     def arm(res: AlphaResult, ints: dict[str, Interval]) -> BootstrapResult:
         return BootstrapResult(
@@ -987,6 +1084,10 @@ def compare(
         differences=differences,
         warnings=tuple(recorded),
         notes=notes,
+        margin=margin,
+        test=test,
+        verdicts=verdicts,
+        p_values=p_values,
     )
 
 
@@ -1012,6 +1113,45 @@ def _check_options(
         raise DesignError(f"alpha_min must lie in [-1, 1]; got {alpha_min!r}")
     if on_undefined not in ON_UNDEFINED:
         raise DesignError(f"on_undefined must be one of {list(ON_UNDEFINED)}; got {on_undefined!r}")
+
+
+def _test_note(test: str, margin: float | None, confidence: float) -> str:
+    level = f"{(1 - confidence) / 2:.3g}"
+    if test == "non_inferiority":
+        return (
+            f"Non-inferiority at margin {margin:g}: b is non-inferior when the lower end of "
+            f"the {confidence:.0%} interval is above -{margin:g}, a one-sided test at level "
+            f"{level}. Each p-value inverts the same interval, so p < {level} exactly when "
+            "the verdict is non_inferior. Fix the margin before looking at the results."
+        )
+    return (
+        f"Equivalence at margin {margin:g}: a and b are equivalent when the {confidence:.0%} "
+        f"interval lies inside (-{margin:g}, {margin:g}), two one-sided tests at level "
+        f"{level} each; a 5% equivalence test uses confidence=0.90. Each p-value inverts "
+        f"the same interval, so p < {level} exactly when the verdict is equivalent. Fix the "
+        "margin before looking at the results."
+    )
+
+
+def _check_test(margin: float | None, test: str | None) -> float | None:
+    """A non-inferiority or equivalence test needs both its name and its margin."""
+    if test is None and margin is None:
+        return None
+    if test is None or margin is None:
+        raise DesignError(
+            "margin and test go together: pass test='non_inferiority' or 'equivalence' "
+            "with margin, the largest difference in alpha that does not matter"
+        )
+    if test not in TESTS:
+        raise DesignError(f"test must be one of {list(TESTS)}; got {test!r}")
+    if (
+        isinstance(margin, bool)
+        or not isinstance(margin, int | float | np.floating | np.integer)
+        or not math.isfinite(margin)
+        or margin <= 0
+    ):
+        raise DesignError(f"margin must be a finite number above 0; got {margin!r}")
+    return float(margin)
 
 
 def _resolve_level(sample: StudySample, level: str | None) -> tuple[str, str | None]:

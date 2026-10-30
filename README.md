@@ -117,6 +117,26 @@ diff = study.compare(
 print(diff.summary())  # alpha_b - alpha_a with a paired interval
 ```
 
+To decide whether an update changed the judge, declare a margin: the largest drop in alpha that does not matter. `a` is the reference.
+
+```python
+diff = study.compare(
+    a={"condition_id": "frontier"},  # reference
+    b={"condition_id": "distilled"},  # candidate
+    margin=0.03,
+    test="non_inferiority",  # or "equivalence"
+    n_resamples=2000,
+    random_state=7,
+)
+diff.verdicts["as_missing"]  # "non_inferior", "inferior" or "inconclusive"
+diff.p_values["as_missing"]
+```
+
+- **Non-inferiority** reads the lower end of the interval: `non_inferior` when it is above −margin. At the default 95% this is a one-sided test at 2.5%.
+- **Equivalence** reads both ends: `equivalent` when the interval lies inside (−margin, margin). These are two one-sided tests, so a 5% equivalence test uses `confidence=0.90`.
+- Every missing-data policy gets its own verdict, and an undefined interval is `inconclusive`. Each p-value inverts the interval its verdict reads, so the two never disagree.
+- Fix the margin before looking at the results.
+
 ## Splits and reports
 
 Teams tune the judge (prompt, few-shot examples, rubric) and should report reliability on units the tuning never saw. So split before tuning, freeze the judge, then estimate on the test partition.
