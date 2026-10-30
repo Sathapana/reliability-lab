@@ -23,6 +23,7 @@ configurations, so the interval falls on the difference alpha_b - alpha_a.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -52,6 +53,7 @@ SCHEMES: tuple[str, ...] = ("units", "kalpha", "coders", "two_way")
 #: Coder resampling needs at least this many coders to say anything.
 MIN_CODERS = 3
 METHODS: tuple[str, ...] = ("percentile", "bca")
+ON_UNDEFINED: tuple[str, ...] = ("nan", "percentile")
 LEVELS: tuple[str, ...] = ("unit", "group")
 #: Upper bound on the floats held per batch of replicates (bounds memory use).
 BATCH_FLOATS = 10_000_000
@@ -451,27 +453,29 @@ def percentile_interval(
     defined = distribution[~failed]
     if not len(defined):
         return Interval(
-            name,
-            point,
-            np.nan,
-            np.nan,
-            len(distribution),
-            int(failed.sum()),
+            estimate=name,
+            point=point,
+            low=np.nan,
+            high=np.nan,
+            n_resamples=len(distribution),
+            n_failed=int(failed.sum()),
             undefined_reason="every replicate was undefined",
             distribution=distribution,
+            method_used="percentile",
         )
     tail = (1.0 - confidence) / 2.0
     low, high = np.quantile(defined, [tail, 1.0 - tail])
     below = float((defined < alpha_min).mean()) if alpha_min is not None else None
     return Interval(
-        name,
-        point,
-        float(low),
-        float(high),
-        len(distribution),
-        int(failed.sum()),
-        below,
+        estimate=name,
+        point=point,
+        low=float(low),
+        high=float(high),
+        n_resamples=len(distribution),
+        n_failed=int(failed.sum()),
+        p_below_min=below,
         distribution=distribution,
+        method_used="percentile",
     )
 
 
@@ -492,25 +496,86 @@ def bca_interval(
     n_resamples = len(distribution)
     failed = np.isnan(distribution)
     z_alpha = float(special.ndtri((1.0 - confidence) / 2.0))
+    z0, a_hat = bca_parameters(distribution, theta_hat, jackknife)
     with np.errstate(divide="ignore", invalid="ignore"):
-        below_hat = (distribution < theta_hat).sum() + (distribution <= theta_hat).sum()
-        z0 = special.ndtri(below_hat / (2 * n_resamples))
-        u = jackknife.mean() - jackknife
-        a_hat = (u**3).sum() / (6.0 * (u**2).sum() ** 1.5)
         num = z0 + np.array([z_alpha, -z_alpha])
         levels = special.ndtr(z0 + num / (1.0 - a_hat * num))
     low = high = np.nan
-    reason: str | None = (
-        "the BCa interval is undefined (undefined replicates or a degenerate jackknife)"
-    )
+    reason: str | None = None
     if not failed.any() and np.isfinite(levels).all():
         low, high = (float(q) for q in np.quantile(distribution, levels))
-        reason = None
+    else:
+        reason = _bca_failure(failed, z0, jackknife)
     defined = distribution[~failed]
     below = float((defined < alpha_min).mean()) if alpha_min is not None and len(defined) else None
     return Interval(
-        name, point, low, high, n_resamples, int(failed.sum()), below, reason, distribution
+        estimate=name,
+        point=point,
+        low=low,
+        high=high,
+        n_resamples=n_resamples,
+        n_failed=int(failed.sum()),
+        p_below_min=below,
+        undefined_reason=reason,
+        distribution=distribution,
+        method_used="bca",
     )
+
+
+def bca_parameters(
+    distribution: FloatArray, theta_hat: float, jackknife: FloatArray
+) -> tuple[float, float]:
+    """The bias correction z0 and the acceleration a_hat of a BCa interval.
+
+    Either is non-finite when it is undefined: z0 when every replicate falls on one
+    side of ``theta_hat``, a_hat when the jackknife is undefined or constant.
+    """
+    with np.errstate(divide="ignore", invalid="ignore"):
+        below_hat = (distribution < theta_hat).sum() + (distribution <= theta_hat).sum()
+        z0 = special.ndtri(below_hat / (2 * len(distribution)))
+        u = jackknife.mean() - jackknife
+        a_hat = (u**3).sum() / (6.0 * (u**2).sum() ** 1.5)
+    return float(z0), float(a_hat)
+
+
+def _bca_failure(failed: npt.NDArray[np.bool_], z0: float, jackknife: FloatArray) -> str:
+    """Why a BCa interval is undefined, checked in the order the formula needs its parts."""
+    if failed.any():
+        return (
+            f"the BCa interval is undefined: {int(failed.sum())} of {len(failed)} replicates "
+            "are undefined, and BCa needs every one"
+        )
+    if not np.isfinite(z0):
+        return (
+            "the BCa interval is undefined: every replicate falls on one side of the "
+            "estimate, so the bias correction is infinite"
+        )
+    if np.isnan(jackknife).any():
+        return (
+            "the BCa interval is undefined: alpha is undefined with one cluster left out, "
+            "so the acceleration is undefined"
+        )
+    if not np.ptp(jackknife) > 0:
+        return (
+            "the BCa interval is undefined: alpha is the same with any one cluster left "
+            "out, so the acceleration is undefined"
+        )
+    return "the BCa interval is undefined: its adjusted quantile levels are not finite"
+
+
+def with_fallback(
+    interval: Interval,
+    confidence: float,
+    on_undefined: str,
+    alpha_min: float | None = None,
+) -> Interval:
+    """The percentile interval over the same replicates in place of an undefined BCa one."""
+    if on_undefined == "nan" or interval.defined or interval.method_used != "bca":
+        return interval
+    fallback = percentile_interval(
+        interval.estimate, interval.point, interval.distribution, confidence, alpha_min
+    )
+    return dataclasses.replace(fallback, fallback_reason=interval.undefined_reason)
 
 
 def bca_weights(seed: int, n_clusters: int, n_resamples: int) -> npt.NDArray[np.int64]:
@@ -560,9 +625,10 @@ def bootstrap(
     method: str,
     alpha_min: float | None,
     random_state: int | np.random.Generator | None,
+    on_undefined: str = "nan",
 ) -> BootstrapResult:
     """Intervals for every estimate of ``result``; see :meth:`AlphaResult.bootstrap`."""
-    _check_options(n_resamples, confidence, method, alpha_min)
+    _check_options(n_resamples, confidence, method, alpha_min, on_undefined)
     if scheme not in SCHEMES:
         raise DesignError(f"scheme must be one of {list(SCHEMES)}; got {scheme!r}")
     seed = _seed(random_state)
@@ -594,13 +660,14 @@ def bootstrap(
             pool = kalpha_pool(sample, name)
             if pool.undefined_reason:
                 intervals[name] = Interval(
-                    name,
-                    points[name],
-                    np.nan,
-                    np.nan,
-                    n_resamples,
-                    0,
+                    estimate=name,
+                    point=points[name],
+                    low=np.nan,
+                    high=np.nan,
+                    n_resamples=n_resamples,
+                    n_failed=0,
                     undefined_reason=pool.undefined_reason,
+                    method_used="percentile",
                 )
                 continue
             distribution = kalpha_distribution(pool, np.random.default_rng(seed), n_resamples)
@@ -679,9 +746,10 @@ def bootstrap(
                 )
             else:
                 theta_hat, jackknife = bca_parts(clusters, values, sample.distance)
-                intervals[name] = bca_interval(
+                interval = bca_interval(
                     name, points[name], distribution, theta_hat, jackknife, confidence, alpha_min
                 )
+                intervals[name] = with_fallback(interval, confidence, on_undefined, alpha_min)
         notes.append(UNITS_NOTE.format(level=level_used, within=" within strata" if strata else ""))
         if len(names) > 1:
             notes.append("All estimates use the same resamples, so their intervals are paired.")
@@ -748,14 +816,15 @@ def coder_jackknife(
         if undefined.any():
             missing = preview(sample.coder_names[undefined])
             intervals[name] = Interval(
-                name,
-                point,
-                np.nan,
-                np.nan,
-                m,
-                int(undefined.sum()),
+                estimate=name,
+                point=point,
+                low=np.nan,
+                high=np.nan,
+                n_resamples=m,
+                n_failed=int(undefined.sum()),
                 undefined_reason=f"alpha is undefined without coders {missing}",
                 distribution=without,
+                method_used="t",
             )
             errors[name] = np.nan
             continue
@@ -763,7 +832,14 @@ def coder_jackknife(
         errors[name] = se
         # Alpha cannot exceed 1, so the upper end is capped there.
         intervals[name] = Interval(
-            name, point, point - t * se, min(point + t * se, 1.0), m, 0, distribution=without
+            estimate=name,
+            point=point,
+            low=point - t * se,
+            high=min(point + t * se, 1.0),
+            n_resamples=m,
+            n_failed=0,
+            distribution=without,
+            method_used="t",
         )
     recorded = _interval_warnings(intervals, m, replicates=False)
     return JackknifeResult(
@@ -798,9 +874,10 @@ def compare(
     strata: bool,
     method: str,
     random_state: int | np.random.Generator | None,
+    on_undefined: str = "nan",
 ) -> ComparisonResult:
     """Paired intervals on alpha_b - alpha_a; see :meth:`ReliabilityStudy.compare`."""
-    _check_options(n_resamples, confidence, method, None)
+    _check_options(n_resamples, confidence, method, None, on_undefined)
     sample_a, sample_b = result_a._sample, result_b._sample
     if sample_a is None or sample_b is None:
         raise DesignError("both arms must be results of ReliabilityStudy.alpha()")
@@ -845,10 +922,27 @@ def compare(
             continue
         theta_a, jack_a = bca_parts(clusters_a, values_a, sample_a.distance)
         theta_b, jack_b = bca_parts(clusters_b, values_b, sample_b.distance)
-        arm_intervals["a"][name] = bca_interval(name, point_a, dist_a, theta_a, jack_a, confidence)
-        arm_intervals["b"][name] = bca_interval(name, point_b, dist_b, theta_b, jack_b, confidence)
-        differences[name] = bca_interval(
-            name, point_b - point_a, dist_b - dist_a, theta_b - theta_a, jack_b - jack_a, confidence
+        arm_intervals["a"][name] = with_fallback(
+            bca_interval(name, point_a, dist_a, theta_a, jack_a, confidence),
+            confidence,
+            on_undefined,
+        )
+        arm_intervals["b"][name] = with_fallback(
+            bca_interval(name, point_b, dist_b, theta_b, jack_b, confidence),
+            confidence,
+            on_undefined,
+        )
+        differences[name] = with_fallback(
+            bca_interval(
+                name,
+                point_b - point_a,
+                dist_b - dist_a,
+                theta_b - theta_a,
+                jack_b - jack_a,
+                confidence,
+            ),
+            confidence,
+            on_undefined,
         )
 
     recorded.extend(_interval_warnings(differences, n_resamples))
@@ -900,7 +994,11 @@ def compare(
 
 
 def _check_options(
-    n_resamples: int, confidence: float, method: str, alpha_min: float | None
+    n_resamples: int,
+    confidence: float,
+    method: str,
+    alpha_min: float | None,
+    on_undefined: str = "nan",
 ) -> None:
     if isinstance(n_resamples, bool) or not isinstance(n_resamples, int | np.integer):
         raise DesignError(f"n_resamples must be an integer; got {n_resamples!r}")
@@ -912,6 +1010,8 @@ def _check_options(
         raise DesignError(f"method must be one of {list(METHODS)}; got {method!r}")
     if alpha_min is not None and not -1 <= alpha_min <= 1:
         raise DesignError(f"alpha_min must lie in [-1, 1]; got {alpha_min!r}")
+    if on_undefined not in ON_UNDEFINED:
+        raise DesignError(f"on_undefined must be one of {list(ON_UNDEFINED)}; got {on_undefined!r}")
 
 
 def _resolve_level(sample: StudySample, level: str | None) -> tuple[str, str | None]:
@@ -963,9 +1063,20 @@ def _interval_warnings(
             )
         )
     for name, interval in intervals.items():
+        if interval.fallback_reason:
+            cause = interval.fallback_reason.removeprefix("the BCa interval is undefined: ")
+            found.append(
+                emit(
+                    BootstrapWarning,
+                    f"no BCa interval for {name} ({cause}); the percentile interval over the "
+                    "defined replicates is reported instead, as on_undefined='percentile' asks",
+                    stacklevel=4,
+                )
+            )
         if interval.undefined_reason:
             advice = (
-                "; method='percentile' gives an interval from the defined replicates"
+                "; method='percentile' or on_undefined='percentile' gives an interval from "
+                "the defined replicates"
                 if "BCa" in interval.undefined_reason
                 else ""
             )

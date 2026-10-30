@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- An undefined BCa interval now names its cause in `undefined_reason`: undefined replicates, every replicate on one side of the estimate (infinite bias correction), alpha undefined with a cluster left out, or a constant jackknife (undefined acceleration).
+- `on_undefined="percentile"` in `AlphaResult.bootstrap()` and `ReliabilityStudy.compare()` reports the percentile interval over the same resamples in place of an undefined BCa interval. The interval records `method_used="percentile"` and the BCa failure in `fallback_reason`, and a `BootstrapWarning` says so. The default, `"nan"`, still leaves no interval.
+- Every interval records `method_used`: `"percentile"`, `"bca"`, or `"t"` for the coder jackknife. The new fields appear in tables and JSON reports (`diff_method_used` and `diff_fallback_reason` in comparisons).
+
 ## 0.1.5
 
 Simulated ratings.
