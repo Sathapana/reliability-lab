@@ -70,6 +70,7 @@ from reliability_lab.report import (
     Diagnostic,
     Level,
     Method,
+    OnUndefined,
     Provenance,
     RecordedWarning,
     emit,
@@ -489,6 +490,7 @@ class ReliabilityStudy:
         method: Method = "percentile",
         random_state: int | np.random.Generator | None = None,
         scheme: str = "units",
+        on_undefined: OnUndefined = "nan",
     ) -> ComparisonResult:
         """Paired comparison of two configurations on the same units.
 
@@ -498,7 +500,8 @@ class ReliabilityStudy:
         must cover exactly the same units, because different item sets answer a
         different question. Every replicate resamples the same units (or groups)
         for both arms, and the interval is placed on alpha_b - alpha_a. Only the
-        units scheme has a paired form.
+        units scheme has a paired form. ``on_undefined`` works as in
+        :meth:`AlphaResult.bootstrap`, for the difference and for both arms.
         """
         if scheme != "units":
             raise DesignError(
@@ -533,6 +536,7 @@ class ReliabilityStudy:
             strata=strata,
             method=method,
             random_state=random_state,
+            on_undefined=on_undefined,
         )
         # What changed between the arms: the model (from the ratings) and, when a
         # trace is given, the recorded configuration fields.

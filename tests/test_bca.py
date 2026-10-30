@@ -1,3 +1,4 @@
+import json
 import warnings
 
 import numpy as np
@@ -8,6 +9,7 @@ from scipy import stats
 
 from reliability_lab import AlphaResult, BootstrapWarning, DesignError
 from reliability_lab.inference import (
+    bca_interval,
     cluster_coincidences,
     cluster_plan,
     jackknife_alphas,
@@ -168,3 +170,112 @@ def test_bca_refusals(kwargs: dict[str, object], message: str) -> None:
     )
     with pytest.raises(DesignError, match=message):
         study.alpha().bootstrap(**kwargs)  # type: ignore[arg-type]
+
+
+# -- why a BCa interval is undefined, and the opt-in fallback -------------------------
+
+SKEWED = {"a": ["x"] * 19 + ["y"], "b": ["x"] * 20}
+
+
+def _varied(n: int, seed: int) -> np.ndarray:
+    return np.random.default_rng(seed).normal(0.5, 0.1, n)
+
+
+@pytest.mark.parametrize(
+    ("distribution", "theta_hat", "jackknife", "cause"),
+    [
+        (np.array([0.4, np.nan, 0.5, 0.6, np.nan]), 0.5, _varied(10, 1), "2 of 5 replicates"),
+        (np.linspace(0.6, 0.9, 50), 0.1, _varied(10, 2), "one side of the estimate"),
+        (_varied(50, 3), 0.5, np.array([0.4, np.nan, 0.6, 0.5]), "one cluster left out"),
+        (_varied(50, 4), 0.5, np.full(10, 0.5), "the same with any one cluster"),
+    ],
+    ids=["undefined replicates", "one side", "undefined jackknife", "constant jackknife"],
+)
+def test_bca_names_why_it_is_undefined(
+    distribution: np.ndarray, theta_hat: float, jackknife: np.ndarray, cause: str
+) -> None:
+    interval = bca_interval("as_missing", 0.5, distribution, theta_hat, jackknife, 0.95)
+    assert not interval.defined
+    assert interval.undefined_reason is not None
+    assert interval.undefined_reason.startswith("the BCa interval is undefined: ")
+    assert cause in interval.undefined_reason
+    assert interval.method_used == "bca"
+    assert np.isnan(interval.low) and np.isnan(interval.high)
+
+
+def test_a_defined_bca_interval_has_no_reason() -> None:
+    interval = bca_interval("as_missing", 0.5, _varied(200, 5), 0.5, _varied(10, 6), 0.95)
+    assert interval.defined and interval.undefined_reason is None
+    assert interval.method_used == "bca" and interval.fallback_reason is None
+
+
+@pytest.mark.filterwarnings("ignore::reliability_lab.CategorySkewWarning")
+def test_on_undefined_percentile_reports_the_percentile_interval() -> None:
+    result = human_study(SKEWED, "nominal", ["x", "y"]).alpha()
+    with pytest.warns(BootstrapWarning):
+        default = result.bootstrap(scheme="units", method="bca", n_resamples=500, random_state=1)
+    assert not default["as_missing"].defined
+    assert default["as_missing"].fallback_reason is None
+
+    with pytest.warns(BootstrapWarning) as caught:
+        boot = result.bootstrap(
+            scheme="units",
+            method="bca",
+            n_resamples=500,
+            random_state=1,
+            on_undefined="percentile",
+        )
+    interval = boot["as_missing"]
+    assert interval.defined and interval.method_used == "percentile"
+    assert interval.fallback_reason == default["as_missing"].undefined_reason
+    assert "replicates are undefined" in interval.fallback_reason
+    # The same BCa resamples, read as percentiles over the defined replicates.
+    replicates = default["as_missing"].distribution
+    low, high = np.quantile(replicates[~np.isnan(replicates)], [0.025, 0.975])
+    assert (interval.low, interval.high) == pytest.approx((low, high))
+    assert interval.n_failed == default["as_missing"].n_failed
+    messages = [str(w.message) for w in caught]
+    assert any("no BCa interval for as_missing" in m and "reported instead" in m for m in messages)
+
+    payload = json.loads(boot.to_json())["intervals"]["as_missing"]
+    assert payload["method_used"] == "percentile"
+    assert payload["fallback_reason"] == interval.fallback_reason
+    assert set(boot.to_frame().columns) >= {"method_used", "fallback_reason"}
+
+
+@pytest.mark.filterwarnings("ignore::reliability_lab.CategorySkewWarning")
+def test_on_undefined_applies_to_comparisons() -> None:
+    matrix = {**SKEWED, "c": ["x"] * 18 + ["y"] * 2, "d": ["x"] * 20}
+    study = human_study(matrix, "nominal", ["x", "y"])
+    arms = {"a": {"rater_id": ["a", "b"]}, "b": {"rater_id": ["c", "d"]}}
+    with pytest.warns(BootstrapWarning):
+        default = study.compare(**arms, method="bca", n_resamples=300, random_state=2)
+    with pytest.warns(BootstrapWarning):
+        diff = study.compare(
+            **arms, method="bca", n_resamples=300, random_state=2, on_undefined="percentile"
+        )
+    for old, new in [
+        (default["as_missing"], diff["as_missing"]),
+        (default.arm_a["as_missing"], diff.arm_a["as_missing"]),
+        (default.arm_b["as_missing"], diff.arm_b["as_missing"]),
+    ]:
+        if old.defined:
+            assert new.method_used == "bca" and new.low == old.low
+        else:
+            assert new.method_used == "percentile" and new.defined
+            assert new.fallback_reason == old.undefined_reason
+    assert not default["as_missing"].defined  # the case this test is about
+    assert "diff_method_used" in diff.to_frame().columns
+
+
+def test_percentile_and_jackknife_intervals_record_their_method() -> None:
+    result = human_study(F4["matrix"], "interval", F4["values"]).alpha()
+    boot = result.bootstrap(scheme="units", n_resamples=200, random_state=0)
+    assert boot["as_missing"].method_used == "percentile"
+    assert result.coder_jackknife()["as_missing"].method_used == "t"
+
+
+def test_on_undefined_is_checked() -> None:
+    result = human_study(F4["matrix"], "interval", F4["values"]).alpha()
+    with pytest.raises(DesignError, match="on_undefined"):
+        result.bootstrap(scheme="units", on_undefined="drop")  # type: ignore[arg-type]

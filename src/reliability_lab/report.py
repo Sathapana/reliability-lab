@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 Scheme = Literal["units", "kalpha", "coders", "two_way"]
 Level = Literal["unit", "group"]
 Method = Literal["percentile", "bca"]
+OnUndefined = Literal["nan", "percentile"]
 
 
 @dataclass(frozen=True)
@@ -247,6 +248,7 @@ class AlphaResult:
         method: Method = "percentile",
         alpha_min: float | None = None,
         random_state: int | np.random.Generator | None = None,
+        on_undefined: OnUndefined = "nan",
     ) -> BootstrapResult:
         """Confidence intervals for every estimate, by a named resampling scheme.
 
@@ -269,9 +271,13 @@ class AlphaResult:
         ``method="bca"`` (units scheme only) gave the most accurate coverage in the
         simulations of ``docs/guidance/bootstrap-coverage.md``. On small samples
         dominated by one category it can fail to produce an interval; that is
-        warned about, and ``method="percentile"`` then still gives one.
-        ``alpha_min`` adds the share of replicates below that minimum. All
-        estimates use the same resamples, so their intervals are paired.
+        warned about, the interval's ``undefined_reason`` names the cause, and
+        ``method="percentile"`` then still gives one. ``on_undefined="percentile"``
+        reports the percentile interval over the same resamples in place of an
+        undefined BCa interval; the interval records ``method_used="percentile"``
+        and the BCa failure, and a warning says so. The default, ``"nan"``, leaves
+        no interval. ``alpha_min`` adds the share of replicates below that minimum.
+        All estimates use the same resamples, so their intervals are paired.
         """
         from reliability_lab.inference import bootstrap
 
@@ -291,6 +297,7 @@ class AlphaResult:
             method=method,
             alpha_min=alpha_min,
             random_state=random_state,
+            on_undefined=on_undefined,
         )
 
     def coder_jackknife(self, *, confidence: float = 0.95) -> JackknifeResult:
@@ -426,6 +433,10 @@ class Interval:
     ``n_failed`` counts replicates where alpha was undefined; the interval uses the
     others. ``p_below_min`` is the share of defined replicates below ``alpha_min``,
     when one was given. ``distribution`` holds every replicate (NaN for failures).
+    ``method_used`` is how the interval was formed: ``"percentile"``, ``"bca"`` or
+    ``"t"`` (the coder jackknife). ``fallback_reason`` is set when a BCa interval
+    was undefined and ``on_undefined="percentile"`` reported the percentile interval
+    instead; it gives the BCa failure.
     """
 
     estimate: str
@@ -437,6 +448,8 @@ class Interval:
     p_below_min: float | None = None
     undefined_reason: str | None = None
     distribution: npt.NDArray[np.float64] = field(default_factory=lambda: np.empty(0), repr=False)
+    method_used: str | None = None
+    fallback_reason: str | None = None
 
     @property
     def defined(self) -> bool:
@@ -452,6 +465,8 @@ class Interval:
             "n_failed": self.n_failed,
             "p_below_min": self.p_below_min,
             "undefined_reason": self.undefined_reason,
+            "method_used": self.method_used,
+            "fallback_reason": self.fallback_reason,
         }
 
     def to_dict(self, include_distribution: bool = False) -> dict[str, Any]:
