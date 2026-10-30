@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Non-inferiority and equivalence tests in `ReliabilityStudy.compare()`: pass `margin` with `test="non_inferiority"` or `test="equivalence"`, with `a` as the reference.
+  - `ComparisonResult.verdicts` gives a decision for every missing-data policy: `non_inferior`, `inferior`, `equivalent`, `not_equivalent` or `inconclusive`. It reads the interval the comparison already reports, so at the default 95% non-inferiority is a one-sided test at 2.5%, and a 5% equivalence test uses `confidence=0.90`. An undefined interval is `inconclusive`.
+  - `ComparisonResult.p_values` gives the p-value that inverts the same interval, percentile or BCa, so the test rejects exactly when p < (1 − confidence) / 2.
+  - The test and margin appear in the summary, the `differences` table (`verdict`, `p_value`), the JSON (`test`, `margin`, `verdicts`, `p_values`) and the provenance declarations.
 - An undefined BCa interval now names its cause in `undefined_reason`: undefined replicates, every replicate on one side of the estimate (infinite bias correction), alpha undefined with a cluster left out, or a constant jackknife (undefined acceleration).
 - `on_undefined="percentile"` in `AlphaResult.bootstrap()` and `ReliabilityStudy.compare()` reports the percentile interval over the same resamples in place of an undefined BCa interval. The interval records `method_used="percentile"` and the BCa failure in `fallback_reason`, and a `BootstrapWarning` says so. The default, `"nan"`, still leaves no interval.
 - Every interval records `method_used`: `"percentile"`, `"bca"`, or `"t"` for the coder jackknife. The new fields appear in tables and JSON reports (`diff_method_used` and `diff_fallback_reason` in comparisons).

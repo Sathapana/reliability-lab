@@ -73,6 +73,7 @@ from reliability_lab.report import (
     OnUndefined,
     Provenance,
     RecordedWarning,
+    Test,
     emit,
 )
 from reliability_lab.split import TEST, SplitManifest, UnitLayout, assign_units, make_manifests
@@ -491,6 +492,8 @@ class ReliabilityStudy:
         random_state: int | np.random.Generator | None = None,
         scheme: str = "units",
         on_undefined: OnUndefined = "nan",
+        margin: float | None = None,
+        test: Test | None = None,
     ) -> ComparisonResult:
         """Paired comparison of two configurations on the same units.
 
@@ -502,6 +505,21 @@ class ReliabilityStudy:
         for both arms, and the interval is placed on alpha_b - alpha_a. Only the
         units scheme has a paired form. ``on_undefined`` works as in
         :meth:`AlphaResult.bootstrap`, for the difference and for both arms.
+
+        ``test`` and ``margin`` (given together) turn the interval into a decision
+        for every missing-data policy, with ``a`` as the reference:
+
+        - ``"non_inferiority"``: ``non_inferior`` when the lower end is above
+          -margin, ``inferior`` when the upper end is below it, otherwise
+          ``inconclusive``. At ``confidence=0.95`` this is a one-sided test at 2.5%.
+        - ``"equivalence"``: ``equivalent`` when the interval lies inside
+          (-margin, margin), ``not_equivalent`` when it lies outside
+          [-margin, margin], otherwise ``inconclusive``. These are two one-sided
+          tests, so a 5% equivalence test uses ``confidence=0.90``.
+
+        An undefined interval is ``inconclusive``. Each p-value inverts the interval
+        its verdict reads, so the test rejects exactly when p < (1 - confidence) / 2.
+        Fix the margin before looking at the results.
         """
         if scheme != "units":
             raise DesignError(
@@ -537,6 +555,8 @@ class ReliabilityStudy:
             method=method,
             random_state=random_state,
             on_undefined=on_undefined,
+            margin=margin,
+            test=test,
         )
         # What changed between the arms: the model (from the ratings) and, when a
         # trace is given, the recorded configuration fields.

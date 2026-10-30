@@ -162,7 +162,8 @@ def test_comparison_output(tmp_path: Path) -> None:
     )
     payload = json.loads(diff.to_json(tmp_path / "diff.json"))
     assert payload["schema"] == "reliability-lab/comparison-result"
-    assert set(payload["provenance"]) == {"a", "b"}
+    assert set(payload["provenance"]) == {"a", "b", "declarations"}
+    assert payload["provenance"]["declarations"] == {"margin": None, "test": None}
     replicates = diff.tables()["replicates"]
     assert list(replicates.columns) == ["estimate", "replicate", "alpha_a", "alpha_b", "difference"]
     pd.testing.assert_series_equal(
