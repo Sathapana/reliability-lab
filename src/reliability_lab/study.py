@@ -450,6 +450,7 @@ class ReliabilityStudy:
                 f"{'last' if self._retries == 'last' else 'first observed'} attempt is counted."
             )
         diagnostics = self._diagnostics(base)
+        diagnostics["category_skew"] = _category_skew(primary)
         findings = [*self._trace_check.confounds, *self._trace_check.notes]
         for diagnostic in diagnostics.values():
             findings.extend(n for n in diagnostic.notes if "declared deterministic" in n)
@@ -673,6 +674,19 @@ class ReliabilityStudy:
             diagnostics["order_swap"] = order_swap(coded, orders)
         return diagnostics
 
+    def _unit_status_counts(self) -> dict[str, npt.NDArray[np.int64]]:
+        """Each unit's counted ratings (retries resolved) that carry no value of their own."""
+        n_units = len(self._unit_labels)
+
+        def count(mask: npt.NDArray[np.bool_]) -> npt.NDArray[np.int64]:
+            return np.bincount(self._unit_codes[mask], minlength=n_units).astype(np.int64)
+
+        return {
+            "abstained": count(self._status == Status.ABSTAINED.value),
+            "inapplicable": count(self._status == Status.INAPPLICABLE.value),
+            "failed": count(self._is_error),
+        }
+
     def _layout(self) -> UnitLayout:
         return UnitLayout(
             labels=self._unit_labels,
@@ -839,6 +853,7 @@ class ReliabilityStudy:
                 "pairable_values": pairable.astype(int),
                 "disagreement": mean_disagreement,
                 "d_o_contribution": contribution,
+                **self._unit_status_counts(),
             }
         )
         share = c.marginals / n if n > 0 else np.full(len(values), np.nan)
@@ -944,6 +959,36 @@ def _resolve_retries(
     kept = np.zeros(len(frame), dtype=bool)
     kept[chosen.to_numpy(dtype=np.intp)] = True
     return kept, int((grouped.size() > 1).sum())
+
+
+def _category_skew(estimate: AlphaEstimate) -> Diagnostic:
+    """How evenly the pairable values spread over the declared domain.
+
+    The normalised entropy H / ln K is 1 when every declared value is used equally
+    and 0 when one value holds them all; e^H is the effective number of values.
+    Unlike observed agreement, both mean the same under every metric.
+    """
+    share = estimate.category_distribution
+    k = len(share)
+    p = share.to_numpy(dtype=float)
+    if not np.isfinite(p).all() or k < 2:
+        entropy = largest_share = np.nan
+        largest_value: Any = None
+    else:
+        used = p[p > 0]
+        entropy = float(-(used * np.log(used)).sum())
+        largest_share = float(np.max(p))
+        largest_value = _plain(share.idxmax())
+    return Diagnostic(
+        name="category_skew",
+        values={
+            "n_categories": k,
+            "normalised_entropy": entropy / math.log(k) if k >= 2 else np.nan,
+            "effective_categories": math.exp(entropy) if math.isfinite(entropy) else np.nan,
+            "largest_value": largest_value,
+            "largest_share": largest_share,
+        },
+    )
 
 
 def _skew_message(estimate: AlphaEstimate) -> str | None:

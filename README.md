@@ -53,6 +53,15 @@ result = study.alpha()
 print(result.summary())
 ```
 
+Each estimate lists its units with their share of the observed disagreement and their abstained, inapplicable and failed ratings. Sorted, that is the list of units to adjudicate first:
+
+```python
+per_unit = result["as_missing"].per_unit
+per_unit.sort_values("d_o_contribution", ascending=False).head(10)
+```
+
+The `category_skew` diagnostic shows how evenly the ratings use the declared scale: the normalised entropy (1 when every value is used equally, 0 when one value holds them all) and the effective number of values. Alpha can be low while observed agreement is high when one value dominates.
+
 ## Simulated ratings
 
 `simulate_ratings` makes synthetic coders for any measurement level, including `"bipolar"`, `circular(U)` and custom distances, at the alpha you choose. Use it to try the API, to see what a given alpha looks like in raw ratings, or to plan how many units a study needs.

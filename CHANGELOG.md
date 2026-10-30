@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A `category_skew` diagnostic on every result: the normalised entropy H / ln K of the pairable values over the K declared values, the effective number of values e^H, and the largest value and its share. It means the same under every metric. `CategorySkewWarning` keeps its 90% rule.
+- `estimate.per_unit` gains each unit's `abstained`, `inapplicable` and `failed` (parse and provider errors) counts, from the ratings that count after retries. Sorted by `d_o_contribution`, it is the adjudication list.
 - Non-inferiority and equivalence tests in `ReliabilityStudy.compare()`: pass `margin` with `test="non_inferiority"` or `test="equivalence"`, with `a` as the reference.
   - `ComparisonResult.verdicts` gives a decision for every missing-data policy: `non_inferior`, `inferior`, `equivalent`, `not_equivalent` or `inconclusive`. It reads the interval the comparison already reports, so at the default 95% non-inferiority is a one-sided test at 2.5%, and a 5% equivalence test uses `confidence=0.90`. An undefined interval is `inconclusive`.
   - `ComparisonResult.p_values` gives the p-value that inverts the same interval, percentile or BCa, so the test rejects exactly when p < (1 − confidence) / 2.
