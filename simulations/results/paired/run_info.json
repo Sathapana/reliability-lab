@@ -1,0 +1,22 @@
+{
+  "grid": "paired",
+  "seed": 20261027,
+  "n_sim": 2000,
+  "n_resamples": 2000,
+  "confidence": [
+    0.95,
+    0.96
+  ],
+  "workers": 8,
+  "scenarios": 18,
+  "wall_seconds": 4280.6,
+  "versions": {
+    "reliability_lab": "0.1.5",
+    "python": "3.12.6",
+    "numpy": "2.5.4",
+    "scipy": "1.18.1",
+    "pandas": "3.1.0"
+  },
+  "platform": "Windows-11-10.0.26200-SP0",
+  "command": "C:\\dev\\reliability-lab\\reliability-lab\\simulations\\run_coverage.py --grid paired --workers 8"
+}

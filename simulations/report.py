@@ -3,7 +3,8 @@
     uv run --group sim python -m simulations.report
 
 Reads ``coverage.csv`` and ``run_info.json`` from ``simulations/results/`` (the
-P5 grid) and ``simulations/results/coders/`` (coders that differ), draws the
+P5 grid), ``simulations/results/coders/`` (coders that differ) and
+``simulations/results/paired/`` (non-inferiority in ``compare()``), draws the
 figures (light and dark PNGs, served through ``<picture>``), and fills the
 template ``simulations/templates/bootstrap-coverage.md``. The output is
 ``docs/guidance/bootstrap-coverage.md``. Edit the template, not the output.
@@ -74,6 +75,14 @@ LABELS = {
     "two_way": "two_way",
     "jackknife": "coder jackknife",
 }
+#: Power at Delta = 0, one line per margin: an ordinal one-hue ramp (blue steps 300,
+#: 450, 600 light; 550, 400, 250 dark), so a wider margin has more contrast in both.
+POWER_RAMP = {
+    "light": ("#6da7ec", "#2a78d6", "#184f95"),
+    "dark": ("#1c5cab", "#3987e5", "#86b6ef"),
+}
+POWER_MARGINS = (0.02, 0.05, 0.1)
+POWER_MARKERS = ("o", "s", "^")
 MARKERS = {"units": "o", "kalpha": "s", "bca": "^", "coders": "s", "two_way": "^", "jackknife": "D"}
 FACTOR_LABELS = {
     "skewed": "Skewed prevalence (80/10/10)",
@@ -311,6 +320,65 @@ def figure_coverage_by_spread(data: pd.DataFrame, mode: str, path: Path) -> None
     plt.close(fig)
 
 
+def figure_power_by_n(data: pd.DataFrame, mode: str, path: Path) -> None:
+    """Share of non-inferior verdicts (BCa, 96%) when the arms are equal, against n, per margin."""
+    t = TOKENS[mode]
+    cells = data[
+        (data["kind"] == "equal") & (data["method"] == "bca") & (data["confidence"] == 0.96)
+    ]
+    fig, axes = plt.subplots(1, 2, figsize=(8.4, 3.4), sharey=True, dpi=200)
+    fig.patch.set_facecolor(t["surface"])
+    handles = []
+    for col, name in enumerate(("nominal", "ordinal")):
+        ax = axes[col]
+        _style(ax, t)
+        rows = cells[cells["scenario_name"] == name].set_index("scenario_n_units").sort_index()
+        sizes = list(rows.index)
+        positions = list(range(len(sizes)))
+        styles = zip(POWER_RAMP[mode], POWER_MARKERS, POWER_MARGINS, strict=True)
+        for colour, marker, margin in styles:
+            y = [rows.loc[n, f"power_{margin:g}"] for n in sizes]
+            (line,) = ax.plot(
+                positions,
+                y,
+                color=colour,
+                linewidth=2 * PX,
+                marker=marker,
+                markersize=8 * PX,
+                markeredgecolor=t["surface"],
+                markeredgewidth=2 * PX,
+                solid_capstyle="round",
+                solid_joinstyle="round",
+                label=f"margin {margin:g}",
+            )
+            if col == 0:
+                handles.append(line)
+            if col == 1:
+                ax.text(
+                    positions[-1] + 0.15,
+                    y[-1],
+                    f"{margin:g}",
+                    color=t["ink2"],
+                    fontsize=8,
+                    ha="left",
+                    va="center",
+                )
+        ax.set_ylim(0, 1.0)
+        ax.yaxis.set_major_formatter(lambda v, _: f"{v:.0%}")
+        ax.set_xticks(positions, [f"n = {n}" for n in sizes])
+        ax.set_xlim(-0.3, positions[-1] + 0.6)
+        title = "Nominal, 3 categories" if name == "nominal" else "Ordinal, 5-point scale"
+        ax.set_title(title, color=t["ink"], fontsize=10, loc="left")
+        if col == 0:
+            ax.set_ylabel(
+                "Non-inferior verdicts\nwhen the arms are equal", color=t["ink2"], fontsize=9
+            )
+    _legend(fig, t, handles)
+    fig.tight_layout(rect=(0, 0, 1, 0.9))
+    fig.savefig(path, facecolor=t["surface"])
+    plt.close(fig)
+
+
 #: name: (draw, alt text, results it is drawn from)
 FIGURES = {
     "coverage_by_n": (
@@ -328,6 +396,12 @@ FIGURES = {
         "Coverage of the units, coders and two-way bootstraps and the coder jackknife "
         "as coders differ more",
         "coders",
+    ),
+    "power_by_n": (
+        figure_power_by_n,
+        "Share of non-inferior verdicts from 96% BCa intervals when the two configurations "
+        "are equally reliable, against the number of units, for margins 0.02, 0.05 and 0.1",
+        "paired",
     ),
 }
 
@@ -350,8 +424,8 @@ TIMES = chr(0x00D7)
 TAU = chr(0x03C4)
 
 
-def _pct(x: float) -> str:
-    return MISSING if pd.isna(x) else f"{x:.1%}"
+def _pct(x: float, digits: int = 1) -> str:
+    return MISSING if pd.isna(x) else f"{x:.{digits}%}"
 
 
 def _num(x: float, digits: int = 3) -> str:
@@ -476,18 +550,89 @@ def table_coders(data: pd.DataFrame) -> str:
 
 
 def run_info_text(info: dict[str, Any], data: pd.DataFrame) -> str:
-    truth = "both_random" if info.get("grid") == "coders" else "true_alpha"
+    grid = info.get("grid")
+    truth = {"coders": "both_random", "paired": "true_delta"}.get(grid, "true_alpha")
     mc_error = data.drop_duplicates("cell")[f"{truth}_mc_error"].max()
     v = info["versions"]
+    if grid == "paired":
+        precision = (
+            f"The largest Monte Carlo error of a true difference is {mc_error:.4f}, and a "
+            "rejection rate near 2.5% has a Monte Carlo standard error of about "
+            f"{(0.025 * 0.975 / info['n_sim']) ** 0.5:.2%}."
+        )
+    else:
+        precision = (
+            f"The largest Monte Carlo error of a population alpha is {mc_error:.4f}, and a "
+            "coverage near 95% has a Monte Carlo standard error of about "
+            f"{(0.95 * 0.05 / info['n_sim']) ** 0.5:.1%}."
+        )
     return (
         f"{info['scenarios']} scenarios {TIMES} {info['n_sim']:,} replications {TIMES} "
         f"{info['n_resamples']:,} bootstrap resamples, seed {info['seed']}, "
         f"reliability-lab {v['reliability_lab']} (numpy {v['numpy']}, scipy {v['scipy']}, "
         f"pandas {v['pandas']}); {info['wall_seconds'] / 60:.0f} minutes on "
-        f"{info['workers']} workers. The largest Monte Carlo error of a population alpha is "
-        f"{mc_error:.4f}, and a coverage near 95% has a Monte Carlo standard error of "
-        f"about {(0.95 * 0.05 / info['n_sim']) ** 0.5:.1%}."
+        f"{info['workers']} workers. {precision}"
     )
+
+
+PAIRED_LABELS = {
+    "nominal": "Nominal, 3 categories",
+    "ordinal": "Ordinal 5-point",
+    "clustered": "Clustered units",
+    "informative": "Failures on hard units",
+}
+
+
+def _paired(data: pd.DataFrame, kind: str) -> list[tuple[str, pd.DataFrame]]:
+    """(label, rows indexed by method and confidence) for each cell of one kind."""
+    cells = data[data["kind"] == kind]
+    return [
+        (
+            f"{PAIRED_LABELS[str(row['scenario_name'])]}, n = {row['scenario_n_units']}",
+            cells[cells["cell"] == row["cell"]].set_index(["method", "confidence"]),
+        )
+        for _, row in cells.drop_duplicates("cell").iterrows()
+    ]
+
+
+def table_paired_size(data: pd.DataFrame) -> str:
+    """Rejection rate when the true difference sits on the margin, at 95% and 96%."""
+    rows = []
+    for label, cell in _paired(data, "margin"):
+        rows.append(
+            {
+                "Scenario": label,
+                "Margin (= -Δ)": _num(cell.loc[("bca", 0.95), "margin"]),
+                **{
+                    f"{label} {confidence:.0%}: rejects": _pct(
+                        cell.loc[(method, confidence), "rejection_rate"], 2
+                    )
+                    for label, method in (("Percentile", "percentile"), ("BCa", "bca"))
+                    for confidence in (0.95, 0.96)
+                },
+                "BCa 95%: coverage": _pct(cell.loc[("bca", 0.95), "coverage"]),
+            }
+        )
+    return _markdown(pd.DataFrame(rows))
+
+
+def table_paired_power(data: pd.DataFrame) -> str:
+    """Share of non-inferior verdicts when both configurations are equally reliable."""
+    rows = []
+    for label, cell in _paired(data, "equal"):
+        rows.append(
+            {
+                "Scenario": label,
+                "Alpha of each": _num(cell.loc[("bca", 0.96), "true_alpha_a"]),
+                **{
+                    f"BCa 96%, margin {m:g}": _pct(cell.loc[("bca", 0.96), f"power_{m:g}"])
+                    for m in POWER_MARGINS
+                },
+                "BCa 95%, margin 0.05": _pct(cell.loc[("bca", 0.95), "power_0.05"]),
+                "Width (BCa, 96%)": _num(cell.loc[("bca", 0.96), "mean_width"], 2),
+            }
+        )
+    return _markdown(pd.DataFrame(rows))
 
 
 #: name: (table, results it is drawn from)
@@ -497,12 +642,19 @@ TABLES = {
     "clusters": (table_clusters, "base"),
     "failures": (table_failures, "base"),
     "coders": (table_coders, "coders"),
+    "paired_size": (table_paired_size, "paired"),
+    "paired_power": (table_paired_power, "paired"),
 }
 
 
 def render(results: Path = RESULTS, template: Path = TEMPLATE, output: Path = OUTPUT) -> Path:
-    """``results`` holds the P5 grid, and its ``coders/`` folder the coder grid."""
-    sources = {"base": load(results), "coders": load(results / "coders")}
+    """``results`` holds the P5 grid, its ``coders/`` folder the coder grid and its
+    ``paired/`` folder the comparison grid."""
+    sources = {
+        "base": load(results),
+        "coders": load(results / "coders"),
+        "paired": load(results / "paired"),
+    }
     figures = output.parent / "figures"
     figures.mkdir(parents=True, exist_ok=True)
     for name, (draw, _, source) in FIGURES.items():

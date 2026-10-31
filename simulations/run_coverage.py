@@ -2,11 +2,12 @@
 
     uv run python -m simulations.run_coverage                # full P5 grid
     uv run python -m simulations.run_coverage --grid coders  # coders that differ
+    uv run python -m simulations.run_coverage --grid paired  # non-inferiority in compare()
     uv run python -m simulations.run_coverage --quick        # 50 replications, a smoke run
     uv run python -m simulations.run_coverage --cells clustered --n-sim 500
 
 Writes ``coverage.csv`` (one row per scenario and scheme) and ``run_info.json``
-to the output directory (``results/`` or ``results/coders/``), plus
+to the output directory (``results/``, ``results/coders/`` or ``results/paired/``), plus
 ``replications.parquet`` (one row per replication and scheme; not committed).
 """
 
@@ -27,7 +28,7 @@ import pandas as pd
 import scipy
 
 import reliability_lab
-from simulations import coders, coverage, grid
+from simulations import coders, coverage, grid, paired
 
 DEFAULT_SEED = 20261027
 RESULTS = Path(__file__).parent / "results"
@@ -46,6 +47,13 @@ GRIDS: dict[str, tuple[Any, Any, Any, Any, Path]] = {
         coders.run_replications,
         coders.CoderCellResult,
         RESULTS / "coders",
+    ),
+    "paired": (
+        paired.scenarios,
+        paired.paired_truth,
+        paired.run_replications,
+        paired.PairedCellResult,
+        RESULTS / "paired",
     ),
 }
 
@@ -122,7 +130,7 @@ def main(argv: list[str] | None = None) -> None:
         "seed": args.seed,
         "n_sim": args.n_sim,
         "n_resamples": args.n_resamples,
-        "confidence": 0.95,
+        "confidence": list(paired.CONFIDENCES) if args.grid == "paired" else 0.95,
         "workers": args.workers,
         "scenarios": len(indexed),
         "wall_seconds": round(time.perf_counter() - started, 1),

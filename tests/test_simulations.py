@@ -1,9 +1,12 @@
 """Sanity checks on the coverage simulation harness (simulations/, not the package)."""
 
+from pathlib import Path
+
 import numpy as np
+import pandas as pd
 import pytest
 
-from simulations import coders
+from simulations import coders, paired
 from simulations.coverage import (
     Scenario,
     alpha_of,
@@ -118,3 +121,68 @@ def test_coder_grid_smoke() -> None:
 def test_grid_has_26_distinct_cells() -> None:
     cells = [s.cell for s in scenarios()]
     assert len(cells) == 26 == len(set(cells))
+
+
+# -- the paired (non-inferiority) grid ---------------------------------------------
+
+PAIRED_RESULTS = Path(__file__).resolve().parent.parent / "simulations" / "results" / "paired"
+
+
+def test_paired_arms_share_their_units() -> None:
+    ps = paired.PairedScenario(Scenario("nominal", 200), 0.6)
+    a, b = paired.rate_pair(ps, 200, np.random.default_rng(3))
+    np.testing.assert_array_equal(a.truth, b.truth)
+    np.testing.assert_array_equal(a.hard, b.hard)
+    assert alpha_of(b.codes, ps.arm_b) < alpha_of(a.codes, ps.base)
+
+
+def test_equal_cells_have_no_true_difference() -> None:
+    ps = paired.PairedScenario(Scenario("nominal", 50), 0.8)
+    assert ps.kind == "equal" and ps.cell == "nominal-equal-n50"
+    truth = paired.paired_truth(ps, seed=5)
+    assert truth["true_delta"] == 0.0
+    assert abs(truth["simulated_delta"]) < 5 * truth["true_delta_mc_error"] + 0.002
+
+
+@pytest.mark.parametrize("accuracy_b", [paired.ACCURACY_B, 0.8])
+def test_paired_grid_smoke(accuracy_b: float) -> None:
+    ps = paired.PairedScenario(Scenario("nominal", 40), accuracy_b)
+    summary = paired.run_cell(ps, n_sim=3, n_resamples=50, base_seed=1, index=0).summary()
+    assert list(zip(summary["method"], summary["confidence"], strict=True)) == [
+        ("percentile", 0.95),
+        ("percentile", 0.96),
+        ("bca", 0.95),
+        ("bca", 0.96),
+    ]
+    if ps.kind == "margin":
+        assert summary["margin"].iloc[0] == pytest.approx(-summary["true_delta"].iloc[0])
+        assert summary["verdict_agrees"].all()
+        assert summary[["rejection_rate", "rejection_mc_se"]].notna().all().all()
+    else:
+        assert summary[[f"power_{m:g}" for m in paired.POWER_MARGINS]].notna().all().all()
+    cells = [s.cell for s in paired.scenarios()]
+    assert len(cells) == 18 == len(set(cells))
+
+
+def test_the_non_inferiority_gate() -> None:
+    """Release gate for 0.2.0, as revised on 30 Oct 2026 (docs/design/roadmap.md).
+
+    At confidence 0.96 the BCa test must hold 2.5%: on average over the margin
+    cells within two pooled Monte Carlo standard errors (2,000 replications per
+    cell), and in every cell within two of that cell's. At 0.95 no cell may exceed
+    4%. Every verdict agrees with its interval.
+    """
+    data = pd.read_csv(PAIRED_RESULTS / "coverage.csv")
+    margin = data[(data["kind"] == "margin") & (data["method"] == "bca")]
+    assert len(margin) == 20 and (margin["n_sim"] == 2000).all()
+    assert margin["verdict_agrees"].all()
+    strict = margin[margin["confidence"] == 0.96]
+    assert len(strict) == 10
+    pooled_se = (0.025 * 0.975 / (2000 * len(strict))) ** 0.5
+    assert strict["rejection_rate"].mean() <= 0.025 + 2 * pooled_se
+    cell_se = (0.025 * 0.975 / 2000) ** 0.5
+    over = strict[strict["rejection_rate"] > 0.025 + 2 * cell_se]
+    assert over.empty, over[["cell", "rejection_rate"]].to_string()
+    usual = margin[margin["confidence"] == 0.95]
+    over = usual[usual["rejection_rate"] > 0.04]
+    assert over.empty, over[["cell", "rejection_rate"]].to_string()

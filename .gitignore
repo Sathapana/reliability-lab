@@ -26,6 +26,8 @@ simulations/results/replications.parquet
 simulations/results/quick/
 simulations/results/coders/replications.parquet
 simulations/results/coders/quick/
+simulations/results/paired/replications.parquet
+simulations/results/paired/quick/
 
 # Editors / OS
 .vscode/
