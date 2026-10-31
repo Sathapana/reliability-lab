@@ -13,7 +13,7 @@ Two decisions shape the order:
 
 | Release | Theme | Contents | Gate |
 | --- | --- | --- | --- |
-| 0.2.0 | Decisions on a configuration change | Non-inferiority and equivalence in `compare()` (2.2); BCa failure reasons and opt-in fallback (1.2); category-skew diagnostic (1.3); unit triage (1.4) | At `confidence=0.96`, rejection at the margin holds 2.5%; at 0.95 it is measured and reported (revised 30 Oct 2026, see the 0.2.0 gate); a test for each BCa failure cause |
+| 0.2.0 (shipped) | Decisions on a configuration change | Non-inferiority and equivalence in `compare()` (2.2); BCa failure reasons and opt-in fallback (1.2); category-skew diagnostic (1.3); unit triage (1.4) | At `confidence=0.96`, rejection at the margin holds 2.5%; at 0.95 it is measured and reported (revised 30 Oct 2026, see the 0.2.0 gate); a test for each BCa failure cause |
 | 0.3.0 | Planning, CI gates and Arrow input | Sample-size planning (2.3); CLI quality gates (4.2); Arrow input (4.1) | Planned sizes reach their stated power on fresh seeds; CLI runs the example fixtures end to end; polars, DuckDB and pyarrow inputs give the same ratings fingerprint as pandas |
 | 0.4.0 | Judge bias evidence | Within- and between-family alpha (3.2); unit covariates for length bias and self-enhancement (3.2); call telemetry, reduced (3.3) | Simulated same-family errors detected; fixtures for each diagnostic |
 | 0.5.0 | Companion coefficients and plots | `metrics/` with Gwet's AC1 and AC2 (1.3); plotting extra (4.3) | Parity with irrCAC |
@@ -51,6 +51,8 @@ Each gate is a test, as in the framing: a release ships when its gate passes.
 - `python -m simulations.run_coverage --quick` runs 50 replications. At 95% that is a Monte Carlo standard error of about 3 points, so it is a smoke run and cannot show that coverage did not regress. A change to inference reruns the affected cells at full size (`--cells`), commits the results and regenerates the guidance.
 
 ## 0.2.0: Decisions on a configuration change
+
+Shipped in 0.2.0: every item below, with its gate passed on 30 Oct 2026.
 
 **Non-inferiority and equivalence (2.2).** `compare(a=reference, b=candidate, margin=δ, test="non_inferiority" | "equivalence")` (decided 29 Oct 2026). The difference stays $\Delta = \alpha_b - \alpha_a$, so `a` is the reference.
 
@@ -236,6 +238,7 @@ At 95%, the paired intervals of `compare()` miss about 0.25 points too often per
 | `study.unit_disagreement()` (1.4) | `estimate.per_unit`: `pairable_values`, `disagreement`, `d_o_contribution` |
 | Skew warning (1.3) | `CategorySkewWarning`, `estimate.category_distribution`, `estimate.observed_agreement` |
 | BCa degeneracy handling (1.2, part) | An undefined BCa interval gives a reason and a `BootstrapWarning` pointing to `method="percentile"`; parity with `scipy.stats.bootstrap` on degenerate data in `tests/test_bca.py` |
+| A ratings generator in the package (2.3, part) | `simulate_ratings` (0.1.5): know-or-guess ratings for any metric at a chosen alpha, with random or near-miss errors. Unlike the generator of `simulations/`, it has no hard units or clusters |
 
 ## Decisions
 
