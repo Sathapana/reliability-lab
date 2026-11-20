@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `RatingFrame.from_long` and `TraceSidecar.from_frame` accept any table that exports an Arrow stream (`__arrow_c_stream__`), such as polars DataFrames (1.3 and later), DuckDB relations (1.1 and later), pyarrow Tables and RecordBatchReaders. They are converted to pandas through pyarrow, with nulls as `None` or `NaN`. The same ratings give the same fingerprint as from pandas, except fractional `float32` values, timestamps and decimals.
+- The `parquet` extra now needs pyarrow 16 or later, the first version that converts the `string_view` columns polars exports.
+
 ## 0.2.0
 
 Decisions on a configuration change.
