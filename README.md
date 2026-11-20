@@ -25,7 +25,7 @@ Mixed human-LLM panels are planned for 1.0 ([roadmap](https://github.com/Sathapa
 pip install "reliability-lab[sklearn,parquet]"
 ```
 
-The extras are optional. `sklearn` provides the splitters, although any object with a scikit-learn style `split` method works; `parquet` enables `to_parquet`. For development, run `uv sync` and then `uv run pytest`.
+The extras are optional. `sklearn` provides the splitters, although any object with a scikit-learn style `split` method works; `parquet` enables `to_parquet` and ratings from polars, DuckDB and pyarrow tables. For development, run `uv sync` and then `uv run pytest`.
 
 ## Example
 
@@ -61,6 +61,19 @@ per_unit.sort_values("d_o_contribution", ascending=False).head(10)
 ```
 
 The `category_skew` diagnostic shows how evenly the ratings use the declared scale: the normalised entropy (1 when every value is used equally, 0 when one value holds them all) and the effective number of values. Alpha can be low while observed agreement is high when one value dominates.
+
+### Polars, DuckDB and Arrow tables
+
+`RatingFrame.from_long` and `TraceSidecar.from_frame` also accept any table that exports an Arrow stream (`__arrow_c_stream__`): a polars DataFrame, a DuckDB relation, a pyarrow Table or a RecordBatchReader. There is no need to call `to_pandas()` first.
+
+```python
+import duckdb
+
+log = duckdb.sql("select * from 'ratings.parquet' where split = 'test'")
+ratings = RatingFrame.from_long(log, unit="item", rater="annotator", value="label")
+```
+
+The table is converted through pyarrow (the `parquet` extra) and copied into pandas, so the conversion is convenient, not zero-copy. The same ratings give the same fingerprint whatever library they come from. Two exceptions: fractional `float32` values, and timestamps or decimals, can be written differently from their pandas forms.
 
 ## Simulated ratings
 

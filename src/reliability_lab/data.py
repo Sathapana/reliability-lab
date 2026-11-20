@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 from collections.abc import Hashable, Iterable
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 import numpy.typing as npt
@@ -66,6 +67,54 @@ def canonical_text(x: Any) -> str:
     return str(x)
 
 
+class ArrowStreamExportable(Protocol):
+    """A table that exports an Arrow stream: a polars DataFrame, DuckDB relation, pyarrow Table."""
+
+    def __arrow_c_stream__(self, requested_schema: object | None = None) -> object: ...
+
+
+def _as_pandas(df: object) -> pd.DataFrame:
+    """A pandas DataFrame as it is, or an Arrow table converted through pyarrow."""
+    if isinstance(df, pd.DataFrame):  # first: pandas >= 2.2 frames also export Arrow streams
+        return df
+    if not hasattr(df, "__arrow_c_stream__"):
+        raise TypeError(
+            "expected a pandas DataFrame or an Arrow table (a polars DataFrame, DuckDB relation or "
+            f"pyarrow Table), got {type(df).__name__}"
+        )
+    pa = _import_pyarrow(f"reading a {type(df).__name__}")
+    return _arrow_to_pandas(pa.table(df))
+
+
+def _import_pyarrow(purpose: str) -> Any:
+    try:
+        return importlib.import_module("pyarrow")
+    except ImportError as exc:
+        raise ImportError(
+            f"{purpose} needs pyarrow; install it with: pip install 'reliability-lab[parquet]'"
+        ) from exc
+
+
+def _arrow_to_pandas(table: Any) -> pd.DataFrame:
+    """pyarrow's default conversion: missing values become None or NaN, never pd.NA.
+
+    pyarrow before 23 cannot convert dictionaries with unsigned indices (polars
+    categoricals), so their indices are cast to int64 first.
+    """
+    pa = _import_pyarrow("converting an Arrow table")
+    for i, column in enumerate(table.columns):
+        kind = column.type
+        if pa.types.is_dictionary(kind) and not pa.types.is_signed_integer(kind.index_type):
+            chunks = [
+                pa.DictionaryArray.from_arrays(c.indices.cast(pa.int64()), c.dictionary)
+                for c in column.chunks
+            ]
+            signed = pa.chunked_array(chunks, type=pa.dictionary(pa.int64(), kind.value_type))
+            table = table.set_column(i, table.field(i).with_type(signed.type), signed)
+    frame: pd.DataFrame = table.to_pandas()
+    return frame
+
+
 def fingerprint_rows(columns: dict[str, Iterable[Any]]) -> str:
     """sha256 over rows of named columns, independent of row order."""
     names = list(columns)
@@ -107,7 +156,7 @@ class RatingFrame:
     @classmethod
     def from_long(
         cls,
-        df: pd.DataFrame,
+        df: pd.DataFrame | ArrowStreamExportable,
         *,
         unit: Hashable,
         rater: Hashable,
@@ -128,9 +177,13 @@ class RatingFrame:
         carry a value and is recorded as observed. Pass a status column whenever
         abstentions or failed attempts exist. ``attempt`` numbers the retries of
         one call (1, 2, ...); a study then declares which attempt counts.
+
+        ``df`` is a pandas DataFrame, or any table that exports an Arrow stream
+        (a polars DataFrame, DuckDB relation or pyarrow Table). Arrow tables are
+        converted to pandas through pyarrow, the ``parquet`` extra; the ratings
+        are copied, not shared.
         """
-        if not isinstance(df, pd.DataFrame):
-            raise TypeError(f"expected a pandas DataFrame, got {type(df).__name__}")
+        df = _as_pandas(df)
         mapping: dict[str, Hashable | None] = {
             "unit_id": unit,
             "rater_id": rater,

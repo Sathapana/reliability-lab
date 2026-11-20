@@ -20,7 +20,14 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from reliability_lab.data import _plain, canonical_text, fingerprint_rows, preview
+from reliability_lab.data import (
+    ArrowStreamExportable,
+    _as_pandas,
+    _plain,
+    canonical_text,
+    fingerprint_rows,
+    preview,
+)
 from reliability_lab.design import Design
 from reliability_lab.exceptions import DesignError, SchemaError
 from reliability_lab.report import Diagnostic
@@ -70,7 +77,7 @@ class TraceSidecar:
     @classmethod
     def from_frame(
         cls,
-        df: pd.DataFrame,
+        df: pd.DataFrame | ArrowStreamExportable,
         *,
         condition: Hashable,
         provider: Hashable | None = None,
@@ -84,9 +91,12 @@ class TraceSidecar:
         request_time: Hashable | None = None,
         retry_policy: Hashable | None = None,
     ) -> TraceSidecar:
-        """Validate a table of configurations and map its columns to trace fields."""
-        if not isinstance(df, pd.DataFrame):
-            raise TypeError(f"expected a pandas DataFrame, got {type(df).__name__}")
+        """Validate a table of configurations and map its columns to trace fields.
+
+        ``df`` is a pandas DataFrame or a table that exports an Arrow stream, as in
+        :meth:`RatingFrame.from_long`.
+        """
+        df = _as_pandas(df)
         mapping = {
             "provider": provider,
             "prompt_hash": prompt_hash,

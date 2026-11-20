@@ -39,7 +39,7 @@ dependencies = [
 
 [project.optional-dependencies]
 sklearn = ["scikit-learn>=1.4"]
-parquet = ["pyarrow>=15"]
+parquet = ["pyarrow>=16"]
 
 [project.urls]
 Repository = "https://github.com/Sathapana/reliability-lab"
@@ -56,7 +56,7 @@ dev = [
     "pandas-stubs>=2.1",
     # Exercise the optional extras in tests; they stay optional at runtime.
     "scikit-learn>=1.4",
-    "pyarrow>=15",
+    "pyarrow>=16",
 ]
 # Reference implementations used only by the parity tests. `krippendorff` is
 # GPL-licensed, so it must never become a runtime dependency. `irrCAC` is not
@@ -67,13 +67,19 @@ parity = [
     "nltk>=3.8",
     "evalica>=0.3",
 ]
+# Arrow producers for the Arrow input tests: the first versions that export
+# __arrow_c_stream__.
+interop = [
+    "polars>=1.3",
+    "duckdb>=1.1",
+]
 # Figures for the coverage-simulation guidance (simulations/report.py).
 sim = [
     "matplotlib>=3.8",
 ]
 
 [tool.uv]
-default-groups = ["dev", "parity"]
+default-groups = ["dev", "parity", "interop"]
 
 [tool.hatch.version]
 path = "src/reliability_lab/_version.py"
