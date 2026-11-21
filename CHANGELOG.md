@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+Planning, CI gates and Arrow input.
 
 - `plan_krippendorff`, `plan_alpha`, `plan_non_inferiority`, and `SampleSizePlan`: analytical two-coder nominal sample-size rule (Krippendorff, 2011, Table 1; Bloch & Kraemer, 1989) plus CRN + monotone-probit simulation planning for minimum alpha thresholds and paired non-inferiority comparisons.
 - `simulate_ratings`: optional latent-class parameters `hard_share`, `hard_penalty`, `cluster_size` (`group_id`), `cohesion`, `rho`, and informative `hard_failures` with population alpha calibration.
