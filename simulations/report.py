@@ -23,6 +23,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 
 ROOT = Path(__file__).resolve().parent.parent
 RESULTS = ROOT / "simulations" / "results"
@@ -112,7 +114,7 @@ def _floor(coverage: pd.Series) -> float:
     return min(0.6, float(int(coverage.min() * 20) / 20) - 0.05)
 
 
-def _style(ax: plt.Axes, t: dict[str, str]) -> None:
+def _style(ax: Axes, t: dict[str, str]) -> None:
     ax.set_facecolor(t["surface"])
     ax.grid(True, axis="y", color=t["grid"], linewidth=1 * PX)
     ax.set_axisbelow(True)
@@ -122,7 +124,7 @@ def _style(ax: plt.Axes, t: dict[str, str]) -> None:
     ax.tick_params(colors=t["muted"], labelcolor=t["ink2"], length=0, labelsize=8.5)
 
 
-def _legend(fig: plt.Figure, t: dict[str, str], handles: list[Any]) -> None:
+def _legend(fig: Figure, t: dict[str, str], handles: list[Any]) -> None:
     legend = fig.legend(
         handles=handles,
         loc="upper center",
@@ -136,7 +138,7 @@ def _legend(fig: plt.Figure, t: dict[str, str], handles: list[Any]) -> None:
         text.set_color(t["ink"])
 
 
-def _series(ax: plt.Axes, t: dict[str, str], x: list[int], y: list[float], scheme: str) -> Any:
+def _series(ax: Axes, t: dict[str, str], x: list[int], y: list[float], scheme: str) -> Any:
     (line,) = ax.plot(
         x,
         y,
