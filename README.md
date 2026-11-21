@@ -270,6 +270,33 @@ reliability-lab compare study.toml ratings.parquet --a condition_id=baseline --b
 
 Thresholds and comparison verdicts apply across every reported missing-data policy unless `--policy` selects one (`as_missing`, `as_category`, `sensitivity_pessimistic`, `sensitivity_optimistic`, or `sensitivity`). Exit codes are structured for CI: `0` pass, `1` usage/configuration/schema error, `2` threshold or verdict failure, and `3` passing thresholds with design or trace findings when `--strict` is set.
 
+## Judge bias and telemetry
+
+Declare a `UnitSidecar` alongside `RatingFrame` and `TraceSidecar` to check for shared-family judge correlation, length bias, self-enhancement, and API resource usage:
+
+```python
+units = rl.UnitSidecar.from_frame(
+    unit_df,
+    unit="item_id",
+    length_a="len_a",
+    length_b="len_b",
+    output_family_a="gen_family_a",
+    output_family_b="gen_family_b",
+)
+study = rl.ReliabilityStudy(
+    rf,
+    traces=traces,
+    units=units,
+    design="inter_model",
+    level="nominal",
+)
+res = study.alpha(bootstrap=1000, scheme="units")
+print(res.bootstrap.family_intervals)
+print(res.telemetry)
+```
+
+When `prompt_tokens`, `completion_tokens`, `latency_ms`, or `cost` are supplied on `RatingFrame.from_long(...)`, `AlphaResult.telemetry` summarizes totals and per-counted-rating averages per coder across all recorded attempts (including retries).
+
 ## Licence
 
 BSD-3-Clause. Alpha is implemented independently from Krippendorff's papers. The GPL-licensed `krippendorff` package is used only in the test suite, as a parity check.

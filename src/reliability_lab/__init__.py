@@ -17,7 +17,7 @@ from reliability_lab.exceptions import (
     TraceWarning,
     UndefinedAlphaError,
 )
-from reliability_lab.llm import TraceSidecar
+from reliability_lab.llm import TraceSidecar, UnitSidecar
 from reliability_lab.planning import (
     SampleSizePlan,
     plan_alpha,
@@ -75,6 +75,7 @@ __all__ = [
     "TraceSidecar",
     "TraceWarning",
     "UndefinedAlphaError",
+    "UnitSidecar",
     "__version__",
     "circular",
     "plan_alpha",

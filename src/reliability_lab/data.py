@@ -29,6 +29,14 @@ class Status(StrEnum):
 #: Statuses of failed attempts, as plain strings (the stored form).
 ERROR_STATUSES: frozenset[str] = frozenset({Status.PARSE_ERROR.value, Status.PROVIDER_ERROR.value})
 
+#: Optional per-attempt numeric telemetry columns.
+TELEMETRY_FIELDS: tuple[str, ...] = (
+    "prompt_tokens",
+    "completion_tokens",
+    "latency_ms",
+    "cost",
+)
+
 #: Canonical field names, in the order a RatingFrame stores them.
 FIELDS: tuple[str, ...] = (
     "unit_id",
@@ -42,6 +50,7 @@ FIELDS: tuple[str, ...] = (
     "condition_id",
     "run_id",
     "attempt",
+    *TELEMETRY_FIELDS,
 )
 
 
@@ -191,6 +200,10 @@ class RatingFrame:
         condition_id: Hashable | None = None,
         run_id: Hashable | None = None,
         attempt: Hashable | None = None,
+        prompt_tokens: Hashable | None = None,
+        completion_tokens: Hashable | None = None,
+        latency_ms: Hashable | None = None,
+        cost: Hashable | None = None,
     ) -> RatingFrame:
         """Validate a long-form table and map its columns to canonical fields.
 
@@ -198,7 +211,9 @@ class RatingFrame:
         ``rater`` and ``value`` are required. Without ``status`` every row must
         carry a value and is recorded as observed. Pass a status column whenever
         abstentions or failed attempts exist. ``attempt`` numbers the retries of
-        one call (1, 2, ...); a study then declares which attempt counts.
+        one call (1, 2, ...); a study then declares which attempt counts. Optional
+        telemetry fields (``prompt_tokens``, ``completion_tokens``, ``latency_ms``,
+        ``cost``) record per-attempt non-negative resource metrics.
 
         ``df`` is a pandas DataFrame, or any table that exports an Arrow stream
         (a polars DataFrame, DuckDB relation or pyarrow Table). Arrow tables are
@@ -218,6 +233,10 @@ class RatingFrame:
             "condition_id": condition_id,
             "run_id": run_id,
             "attempt": attempt,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "latency_ms": latency_ms,
+            "cost": cost,
         }
         absent = [c for c in mapping.values() if c is not None and c not in df.columns]
         if absent:
@@ -271,6 +290,16 @@ class RatingFrame:
                     f"{len(bad)} rows are not {preview(bad)}"
                 )
             data["attempt"] = arr.astype(np.int64)
+
+        for field in TELEMETRY_FIELDS:
+            if field in declared:
+                data[field] = _validate_nonneg_numeric(
+                    data[field],
+                    field=field,
+                    column=mapping[field],
+                    index=data.index,
+                    whole=field in ("prompt_tokens", "completion_tokens"),
+                )
 
         is_llm = data["model_id"].notna()
         if is_llm.any():
@@ -371,3 +400,38 @@ def _normalise_status(raw: pd.Series[Any], column: Hashable) -> pd.Series[Any]:
             f"unknown status labels {preview(unknown)}; expected one of {sorted(legal)}"
         )
     return labels.astype(object)
+
+
+def _validate_nonneg_numeric(
+    raw: pd.Series[Any],
+    *,
+    field: str,
+    column: Hashable | None,
+    index: pd.Index[Any],
+    whole: bool = False,
+) -> pd.Series[Any]:
+    """Validate optional non-negative finite numbers; preserve nulls as None."""
+    present = ~raw.isna()
+    is_bool = np.array([isinstance(v, bool | np.bool_) for v in raw], dtype=bool)
+    numeric = pd.to_numeric(raw, errors="coerce")
+    arr = numeric.to_numpy(dtype=float, na_value=np.nan)
+    ok = (~present) | ((~is_bool) & np.isfinite(arr) & (arr >= 0.0))
+    if whole:
+        ok &= (~present) | (np.floor(arr) == arr)
+    bad = index[~ok]
+    if len(bad):
+        desc = "non-negative whole number" if whole else "non-negative finite number"
+        raise SchemaError(
+            f"{field} (column {column!r}) must be a {desc}; {len(bad)} rows are not {preview(bad)}"
+        )
+    if whole:
+        out = np.array(
+            [None if _is_missing(arr[i]) else int(arr[i]) for i in range(len(arr))],
+            dtype=object,
+        )
+        return pd.Series(out, index=index, dtype=object)
+    out_f = np.array(
+        [None if _is_missing(arr[i]) else float(arr[i]) for i in range(len(arr))],
+        dtype=object,
+    )
+    return pd.Series(out_f, index=index, dtype=object)

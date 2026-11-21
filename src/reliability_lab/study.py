@@ -55,12 +55,18 @@ from reliability_lab.inference import compare as compare_arms
 from reliability_lab.llm import (
     CodedRatings,
     TraceSidecar,
+    UnitSidecar,
     check_trace,
+    check_units,
     coder_agreement,
     configuration_diff,
+    family_alpha,
+    length_bias,
     merge_trace_checks,
     order_swap,
     run_agreement,
+    self_enhancement,
+    summarize_telemetry,
 )
 from reliability_lab.report import (
     AlphaEstimate,
@@ -151,6 +157,10 @@ class ReliabilityStudy:
         ``attempt`` column numbers them): ``"last"``, or ``"first_observed"`` (the
         first observed attempt, else the last). Required whenever retries exist.
         Error rates are reported per attempt and for the counted attempts.
+    units:
+        An optional :class:`~reliability_lab.llm.UnitSidecar` holding per-unit
+        covariates (such as response lengths or output model family) for the
+        ``length_bias`` and ``self_enhancement`` diagnostics.
     """
 
     def __init__(
@@ -166,15 +176,19 @@ class ReliabilityStudy:
         inapplicable_as: Any = None,
         trace: TraceSidecar | None = None,
         retries: Retries | None = None,
+        units: UnitSidecar | None = None,
     ) -> None:
         if not isinstance(ratings, RatingFrame):
             raise TypeError(f"ratings must be a RatingFrame, got {type(ratings).__name__}")
         if trace is not None and not isinstance(trace, TraceSidecar):
             raise TypeError(f"trace must be a TraceSidecar, got {type(trace).__name__}")
+        if units is not None and not isinstance(units, UnitSidecar):
+            raise TypeError(f"units must be a UnitSidecar, got {type(units).__name__}")
         if retries not in (None, "last", "first_observed"):
             raise DesignError(f"retries must be None, 'last' or 'first_observed'; got {retries!r}")
         self._ratings = ratings
         self._trace = trace
+        self._units = units
         self._retries = retries
         self._warnings: list[RecordedWarning] = []
         #: The manifest and partition this study was split into, if any.
@@ -195,6 +209,7 @@ class ReliabilityStudy:
         # of each (unit, coder), selected by the retries declaration.
         attempt_labels = self._coders.labels(ratings)
         kept, self._n_retried = _resolve_retries(ratings, attempt_labels, retries)
+        self._kept = kept
         resolved = ratings if kept is None else ratings._subset(kept)
         coder_labels = attempt_labels if kept is None else attempt_labels[kept]
         check = check_design(self._design, resolved, self._coders, coder_labels)
@@ -238,6 +253,16 @@ class ReliabilityStudy:
         self._unit_labels = np.asarray(unit_labels, dtype=object)
         self._coder_codes: IntArray = np.asarray(coder_codes, dtype=np.intp)
         self._coder_names = np.asarray(coder_names, dtype=object)
+        self._coder_families: dict[Any, Any] = {}
+        if "model_family" in ratings.declared:
+            fam_arr = data["model_family"].to_numpy(dtype=object)
+            for idx, cname in enumerate(coder_names):
+                fams = [f for f in pd.unique(fam_arr[coder_codes == idx]) if not _is_missing(f)]
+                if len(fams) == 1:
+                    self._coder_families[cname] = _plain(fams[0])
+        self._unit_gaps: tuple[str, ...] = (
+            check_units(units, self._unit_labels) if units is not None else ()
+        )
         self._value_idx = self._code_values(data)
         # Group and stratum are constant within a unit, so the first row tells.
         first_rows = np.unique(self._unit_codes, return_index=True)[1]
@@ -283,6 +308,10 @@ class ReliabilityStudy:
     @property
     def trace(self) -> TraceSidecar | None:
         return self._trace
+
+    @property
+    def units(self) -> UnitSidecar | None:
+        return self._units
 
     @property
     def retries(self) -> str | None:
@@ -451,6 +480,7 @@ class ReliabilityStudy:
             )
         diagnostics = self._diagnostics(base)
         diagnostics["category_skew"] = _category_skew(primary)
+        telemetry = summarize_telemetry(self._ratings, self._kept, self._attempt_coders)
         findings = [*self._trace_check.confounds, *self._trace_check.notes]
         for diagnostic in diagnostics.values():
             findings.extend(n for n in diagnostic.notes if "declared deterministic" in n)
@@ -470,6 +500,7 @@ class ReliabilityStudy:
             provenance=self._provenance(),
             diagnostics=diagnostics,
             trace_findings=tuple(findings),
+            telemetry=telemetry,
             _sample=StudySample(
                 unit_labels=self._unit_labels,
                 unit_groups=self._unit_groups,
@@ -477,6 +508,7 @@ class ReliabilityStudy:
                 distance=self._distance,
                 inputs=inputs,
                 coder_names=self._coder_names,
+                coder_families=self._coder_families or None,
             ),
         )
 
@@ -636,6 +668,7 @@ class ReliabilityStudy:
                 inapplicable_as=self._inapplicable_as,
                 trace=self._trace,
                 retries=self._retries,
+                units=self._units,
             )
         derived._split = split
         derived._split_notes = split_notes
@@ -661,6 +694,7 @@ class ReliabilityStudy:
             self._values,
         )
         diagnostics = {"coder_agreement": coder_agreement(coded)}
+        orders: dict[Any, tuple[str, ...]] | None = None
         if self._design is Design.REPEATABILITY:
             conditions = self._conditions()
             deterministic = (
@@ -678,6 +712,21 @@ class ReliabilityStudy:
                 for coder, condition in condition_of_coder.items()
             }
             diagnostics["order_swap"] = order_swap(coded, orders)
+        elif self._design is Design.INTER_MODEL and self._coder_families:
+            fam_diag = family_alpha(coded, self._coder_families, self._distance)
+            if fam_diag is not None:
+                diagnostics["family_alpha"] = fam_diag
+
+        if self._units is not None:
+            lb_diag = length_bias(coded, self._units, self._distance, orders=orders)
+            if lb_diag is not None:
+                diagnostics["length_bias"] = lb_diag
+            if self._coder_families:
+                se_diag = self_enhancement(
+                    coded, self._units, self._coder_families, self._distance, orders=orders
+                )
+                if se_diag is not None:
+                    diagnostics["self_enhancement"] = se_diag
         return diagnostics
 
     def _unit_status_counts(self) -> dict[str, npt.NDArray[np.int64]]:
@@ -739,6 +788,7 @@ class ReliabilityStudy:
                     "cannot be fully checked."
                 )
         gaps.extend(self._trace_check.gaps)
+        gaps.extend(self._unit_gaps)
         split = None
         if self._split is not None:
             manifest, partition = self._split
@@ -776,6 +826,7 @@ class ReliabilityStudy:
             split=split,
             gaps=tuple(gaps),
             trace=None if self._trace is None else self._trace.to_dict(self._conditions()),
+            units=None if self._units is None else self._units.to_dict(self._unit_labels),
         )
 
     def _code_values(self, data: pd.DataFrame) -> IntArray:

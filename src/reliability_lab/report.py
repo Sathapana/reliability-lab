@@ -95,6 +95,7 @@ class Provenance:
     split: Mapping[str, Any] | None
     gaps: tuple[str, ...]
     trace: Mapping[str, Any] | None = None
+    units: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return _jsonable(  # type: ignore[no-any-return]
@@ -107,6 +108,7 @@ class Provenance:
                 "declarations": dict(self.declarations),
                 "split": None if self.split is None else dict(self.split),
                 "trace": None if self.trace is None else dict(self.trace),
+                "units": None if self.units is None else dict(self.units),
                 "gaps": list(self.gaps),
             }
         )
@@ -248,6 +250,7 @@ class AlphaResult:
     provenance: Provenance | None = None
     diagnostics: Mapping[str, Diagnostic] = field(default_factory=dict)
     trace_findings: tuple[str, ...] = ()
+    telemetry: pd.DataFrame | None = None
     _sample: StudySample | None = field(default=None, repr=False)
 
     @property
@@ -373,6 +376,8 @@ class AlphaResult:
         for name, diagnostic in self.diagnostics.items():
             if diagnostic.table is not None:
                 tables[f"diagnostic_{name}"] = diagnostic.table
+        if self.telemetry is not None:
+            tables["telemetry"] = self.telemetry.copy()
         return tables
 
     def to_json(self, path: str | os.PathLike[str] | None = None) -> str:
@@ -399,6 +404,9 @@ class AlphaResult:
                 "coverage": self.coverage.to_dict(),
                 "diagnostics": {k: d.to_dict() for k, d in self.diagnostics.items()},
                 "trace_findings": list(self.trace_findings),
+                "telemetry": None
+                if self.telemetry is None
+                else self.telemetry.to_dict(orient="records"),
                 "warnings": _warning_dicts(self.warnings),
                 "notes": list(self.notes),
             }
@@ -440,6 +448,11 @@ class AlphaResult:
             for d in self.diagnostics.values():
                 shown = ", ".join(f"{k} {_fmt_any(v)}" for k, v in d.values.items())
                 lines.append(f"  {d.name}: {shown}")
+        if self.telemetry is not None and not self.telemetry.empty:
+            lines.append("\nTelemetry")
+            for row in self.telemetry.to_dict(orient="records"):
+                details = ", ".join(f"{k} {_fmt_any(v)}" for k, v in row.items() if k != "coder")
+                lines.append(f"  {row['coder']}: {details}")
         if self.trace_findings:
             lines.append("\nTrace findings")
             lines.extend(f"  - {f}" for f in self.trace_findings)
@@ -524,16 +537,22 @@ class BootstrapResult:
     notes: tuple[str, ...]
     provenance: Provenance | None = None
     n_coders: int | None = None
+    family_intervals: Mapping[str, Interval] = field(default_factory=dict)
 
     def __getitem__(self, name: str) -> Interval:
         return self.intervals[name]
 
     def tables(self) -> dict[str, pd.DataFrame]:
         """Tidy tables: ``intervals`` and ``replicates`` (estimate, replicate, alpha)."""
-        return {
+        out: dict[str, pd.DataFrame] = {
             "intervals": self.to_frame(),
             "replicates": _replicates({n: {"alpha": i} for n, i in self.intervals.items()}),
         }
+        if self.family_intervals:
+            out["family_intervals"] = pd.DataFrame(
+                [i.summary_row() for i in self.family_intervals.values()]
+            )
+        return out
 
     def to_json(
         self, path: str | os.PathLike[str] | None = None, *, include_distribution: bool = False
@@ -595,6 +614,9 @@ class BootstrapResult:
                 "intervals": {
                     k: i.to_dict(include_distribution) for k, i in self.intervals.items()
                 },
+                "family_intervals": {
+                    k: i.to_dict(include_distribution) for k, i in self.family_intervals.items()
+                },
                 "warnings": _warning_dicts(self.warnings),
                 "notes": list(self.notes),
             }
@@ -615,7 +637,15 @@ class BootstrapResult:
                 f"{i.estimate:<26}{_fmt(i.point):>8}{_fmt(i.low):>9}{_fmt(i.high):>9}"
                 f"{i.n_failed:>8}" + (f"{_fmt(p):>9}" if with_min else "")
             )
+        if self.family_intervals:
+            lines.append("\nFamily intervals (paired with as_missing)")
+            for i in self.family_intervals.values():
+                lines.append(
+                    f"  {i.estimate:<24}{_fmt(i.point):>8}{_fmt(i.low):>9}{_fmt(i.high):>9}"
+                    f"{i.n_failed:>8}"
+                )
         lines.extend(_interval_footnotes(self.intervals.values()))
+        lines.extend(_interval_footnotes(self.family_intervals.values()))
         _append_warnings_and_notes(lines, self.warnings, self.notes)
         return "\n".join(lines)
 
@@ -672,9 +702,19 @@ class ComparisonResult:
             rows.append(row)
         return pd.DataFrame(rows)
 
+    def telemetry_table(self) -> pd.DataFrame | None:
+        """Arm-by-arm telemetry summary when either arm declares call telemetry."""
+        parts = []
+        for arm_name, res in (("a", self.result_a), ("b", self.result_b)):
+            if res.telemetry is not None and not res.telemetry.empty:
+                df = res.telemetry.copy()
+                df.insert(0, "arm", arm_name)
+                parts.append(df)
+        return pd.concat(parts, ignore_index=True) if parts else None
+
     def tables(self) -> dict[str, pd.DataFrame]:
         """Tidy tables: ``differences`` and ``replicates`` (alpha_a, alpha_b, difference)."""
-        return {
+        out: dict[str, pd.DataFrame] = {
             "differences": self.to_frame(),
             "replicates": _replicates(
                 {
@@ -687,6 +727,10 @@ class ComparisonResult:
                 }
             ),
         }
+        telem = self.telemetry_table()
+        if telem is not None:
+            out["telemetry"] = telem
+        return out
 
     def to_json(
         self, path: str | os.PathLike[str] | None = None, *, include_distribution: bool = False
@@ -709,6 +753,7 @@ class ComparisonResult:
         return _jsonable(out)  # type: ignore[no-any-return]
 
     def to_dict(self, include_distribution: bool = False) -> dict[str, Any]:
+        telem = self.telemetry_table()
         return _jsonable(  # type: ignore[no-any-return]
             {
                 **_header("comparison-result"),
@@ -731,6 +776,7 @@ class ComparisonResult:
                 "configuration_diff": None
                 if self.configuration_diff is None
                 else {k: dict(v) for k, v in self.configuration_diff.items()},
+                "telemetry": None if telem is None else telem.to_dict(orient="records"),
                 "warnings": _warning_dicts(self.warnings),
                 "notes": list(self.notes),
             }
@@ -767,6 +813,14 @@ class ComparisonResult:
                 line += f"  {self.verdicts[name]:<15}{_fmt(self.p_values[name]):>7}"
             lines.append(line)
         lines.extend(_interval_footnotes(self.differences.values()))
+        telem = self.telemetry_table()
+        if telem is not None and not telem.empty:
+            lines.append("\nTelemetry")
+            for row in telem.to_dict(orient="records"):
+                details = ", ".join(
+                    f"{k} {_fmt_any(v)}" for k, v in row.items() if k not in ("arm", "coder")
+                )
+                lines.append(f"  arm {row['arm']} | {row['coder']}: {details}")
         _append_warnings_and_notes(lines, self.warnings, self.notes)
         return "\n".join(lines)
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+Judge bias evidence and call telemetry.
+
+- **Within- and between-family agreement**: `family_alpha` diagnostic for `inter_model` studies with `model_family` declared, plus paired unit-cluster bootstrap intervals (`within_family`, `between_family`, `family_gap`) on `BootstrapResult.family_intervals`.
+- **Unit covariates (`UnitSidecar`)**: `UnitSidecar.from_frame(...)` and `ReliabilityStudy(..., units=...)` supporting unit lengths (`length`, `length_a`, `length_b`) and generator model families (`output_family`, `output_family_a`, `output_family_b`), powering `length_bias` (pointwise Spearman rank correlation, pairwise longer-win share, and `order_robustness`) and `self_enhancement` (own-family shift/win share).
+- **Call telemetry**: optional non-negative columns `prompt_tokens`, `completion_tokens`, `latency_ms`, `cost` on `RatingFrame.from_long(...)`, summarized per coder across all attempts and per counted rating in `AlphaResult.telemetry` and `ComparisonResult`.
+- **CLI integration**: `[units]` TOML section, `--units` path override on `evaluate` and `compare`, and telemetry keys under `[columns]`.
+
 ## 0.3.0
 
 Planning, CI gates and Arrow input.

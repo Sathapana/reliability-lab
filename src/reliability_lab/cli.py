@@ -24,11 +24,11 @@ from reliability_lab.exceptions import (
     ReliabilityLabError,
     TraceWarning,
 )
-from reliability_lab.llm import TRACE_FIELDS, TraceSidecar
+from reliability_lab.llm import TRACE_FIELDS, UNIT_FIELDS, TraceSidecar, UnitSidecar
 from reliability_lab.report import AlphaResult, BootstrapResult, ComparisonResult, _write_json
 from reliability_lab.study import SELECTOR_FIELDS, MissingPolicy, ReliabilityStudy, Retries
 
-TOP_SECTIONS = frozenset({"study", "columns", "trace", "bootstrap", "gate"})
+TOP_SECTIONS = frozenset({"study", "columns", "trace", "units", "bootstrap", "gate"})
 STUDY_KEYS = frozenset(
     {
         "measurement",
@@ -56,10 +56,15 @@ COLUMN_MAP: dict[str, str] = {
     "condition_id": "condition_id",
     "run_id": "run_id",
     "attempt": "attempt",
+    "prompt_tokens": "prompt_tokens",
+    "completion_tokens": "completion_tokens",
+    "latency_ms": "latency_ms",
+    "cost": "cost",
 }
 REQUIRED_COLUMNS = ("unit", "rater", "value")
 OPTIONAL_COLUMNS = tuple(k for k in COLUMN_MAP if k not in REQUIRED_COLUMNS)
 TRACE_KEYS = frozenset({"path", "condition", *TRACE_FIELDS})
+UNITS_KEYS = frozenset({"path", "unit", *UNIT_FIELDS})
 BOOTSTRAP_KEYS = frozenset(
     {"scheme", "method", "confidence", "n_resamples", "level", "strata", "seed", "on_undefined"}
 )
@@ -116,6 +121,9 @@ def _build_parser() -> _CliParser:
         help="Additional CSV, TSV, or Parquet ratings file path (repeatable).",
     )
     common.add_argument("--trace", default=None, help="Path to CSV, TSV, or Parquet trace file.")
+    common.add_argument(
+        "--units", default=None, help="Path to CSV, TSV, or Parquet unit covariates."
+    )
     common.add_argument(
         "--policy",
         default=None,
@@ -475,6 +483,7 @@ def _build_study(
         raise _CliError("TOML file must contain a [study] section")
     cols_cfg = _table_section(cfg, "columns", frozenset(COLUMN_MAP))
     trace_cfg = _table_section(cfg, "trace", TRACE_KEYS)
+    units_cfg = _table_section(cfg, "units", UNITS_KEYS)
 
     # 1. Load ratings tables
     rating_paths: list[Path] = []
@@ -585,6 +594,42 @@ def _build_study(
             "[trace] section is present but neither [trace].path nor --trace was provided"
         )
 
+    # 6b. Unit covariate sidecar
+    unit_sidecar: UnitSidecar | None = None
+    units_path_str = args.units if args.units is not None else units_cfg.get("path")
+    if units_path_str is not None:
+        if not isinstance(units_path_str, str):
+            raise _CliError("[units].path must be a file path string")
+        units_path = (
+            Path(units_path_str)
+            if args.units is not None
+            else _resolve_toml_path(base_dir, units_path_str)
+        )
+        df_units = _read_table(units_path)
+        units_kwargs: dict[str, Any] = {}
+        if "unit" in units_cfg:
+            if not isinstance(units_cfg["unit"], str):
+                raise _CliError("[units].unit must be a string column name")
+            units_kwargs["unit"] = units_cfg["unit"]
+        elif "unit_id" in df_units.columns:
+            units_kwargs["unit"] = "unit_id"
+        elif "unit" in df_units.columns:
+            units_kwargs["unit"] = "unit"
+        else:
+            raise _CliError("units file requires [units].unit or a 'unit_id' / 'unit' column")
+        for key in UNIT_FIELDS:
+            if key in units_cfg:
+                if not isinstance(units_cfg[key], str):
+                    raise _CliError(f"[units].{key} must be a string column name")
+                units_kwargs[key] = units_cfg[key]
+            elif key in df_units.columns:
+                units_kwargs[key] = key
+        unit_sidecar = UnitSidecar.from_frame(df_units, **units_kwargs)
+    elif units_cfg:
+        raise _CliError(
+            "[units] section is present but neither [units].path nor --units was provided"
+        )
+
     # 7. Missing policies & retries
     missing_policies: Sequence[MissingPolicy] | None = None
     if "missing_policies" in study_cfg:
@@ -608,6 +653,7 @@ def _build_study(
         inapplicable_as=study_cfg.get("inapplicable_as"),
         trace=trace_sidecar,
         retries=retries,
+        units=unit_sidecar,
     )
     return study_obj, rf, base_dir
 
@@ -917,6 +963,8 @@ def _evaluate_json_payload(
     if boot_res is not None:
         boot_dict = boot_res.to_dict()
         payload["intervals"] = boot_dict["intervals"]
+        if boot_dict.get("family_intervals"):
+            payload["family_intervals"] = boot_dict["family_intervals"]
         payload["bootstrap"] = {
             key: boot_dict[key]
             for key in (

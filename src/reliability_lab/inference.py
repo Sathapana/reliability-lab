@@ -114,6 +114,7 @@ class StudySample:
     distance: Distance
     inputs: Mapping[str, EstimateInput]
     coder_names: npt.NDArray[np.object_]
+    coder_families: Mapping[Any, Any] | None = None
 
     @property
     def n_units(self) -> int:
@@ -837,7 +838,20 @@ def bootstrap(
         if len(names) > 1:
             notes.append("All estimates use the same resamples, so their intervals are paired.")
 
+    family_intervals: dict[str, Interval] = {}
+    if scheme == "units" and "family_alpha" in result.diagnostics and sample.coder_families:
+        family_intervals = _family_bootstrap_intervals(
+            result=result,
+            sample=sample,
+            plan=plan,
+            weights=weights,
+            confidence=confidence,
+            method=method,
+            on_undefined=on_undefined,
+        )
+
     recorded.extend(_interval_warnings(intervals, n_resamples))
+    recorded.extend(_interval_warnings(family_intervals, n_resamples))
     return BootstrapResult(
         scheme=scheme,
         level=level_used,
@@ -856,7 +870,142 @@ def bootstrap(
         notes=tuple(notes),
         provenance=result.provenance,
         n_coders=sample.n_coders if scheme in ("coders", "two_way") else None,
+        family_intervals=family_intervals,
     )
+
+
+def _nanmean_rows(matrix: FloatArray) -> FloatArray:
+    """Row-wise mean ignoring NaN entries (NaN when all entries in a row are NaN)."""
+    valid = ~np.isnan(matrix)
+    counts = valid.sum(axis=1)
+    sums = np.where(valid, matrix, 0.0).sum(axis=1)
+    out = np.full(len(matrix), np.nan, dtype=float)
+    ok = counts > 0
+    out[ok] = sums[ok] / counts[ok]
+    return out
+
+
+def _family_bootstrap_intervals(
+    *,
+    result: AlphaResult,
+    sample: StudySample,
+    plan: ClusterPlan,
+    weights: npt.NDArray[np.int64],
+    confidence: float,
+    method: str,
+    on_undefined: str,
+) -> dict[str, Interval]:
+    """Paired bootstrap intervals for within_family, between_family, and family_gap."""
+    diag = result.diagnostics["family_alpha"]
+    table = diag.table
+    if table is None or table.empty:
+        return {}
+    ref = sample.inputs["as_missing"]
+    name_to_idx = {c: idx for idx, c in enumerate(sample.coder_names)}
+    indicator = sparse.csr_array(
+        (np.ones(sample.n_units), (plan.cluster_of_unit, np.arange(sample.n_units))),
+        shape=(plan.n_clusters, sample.n_units),
+    )
+
+    within_dists: list[FloatArray] = []
+    between_dists: list[FloatArray] = []
+    within_thetas: list[float] = []
+    between_thetas: list[float] = []
+    within_jacks: list[FloatArray] = []
+    between_jacks: list[FloatArray] = []
+
+    ones_w = np.ones((1, plan.n_clusters), dtype=float)
+    for row in table.itertuples(index=False):
+        i = name_to_idx.get(row.coder_a)
+        j = name_to_idx.get(row.coder_b)
+        if i is None or j is None:
+            continue
+        mask = (ref.coder_idx == i) | (ref.coder_idx == j)
+        per_unit, _ = per_unit_coincidences(
+            ref.unit_idx[mask], ref.value_idx[mask], sample.n_units, len(ref.values)
+        )
+        pair_clusters = sparse.csr_array(indicator @ per_unit)
+        dist = replicate_alphas(pair_clusters, weights, ref.values, sample.distance)
+        if row.relation == "within":
+            within_dists.append(dist)
+        else:
+            between_dists.append(dist)
+
+        if method == "bca":
+            th = float(replicate_alphas(pair_clusters, ones_w, ref.values, sample.distance)[0])
+            jk = jackknife_alphas(pair_clusters, ref.values, sample.distance)
+            if row.relation == "within":
+                within_thetas.append(th)
+                within_jacks.append(jk)
+            else:
+                between_thetas.append(th)
+                between_jacks.append(jk)
+
+    out: dict[str, Interval] = {}
+    groups: dict[str, tuple[float, FloatArray, float | None, FloatArray | None]] = {}
+
+    w_dist = (
+        _nanmean_rows(np.column_stack(within_dists))
+        if within_dists
+        else np.full(len(weights), np.nan)
+    )
+    b_dist = (
+        _nanmean_rows(np.column_stack(between_dists))
+        if between_dists
+        else np.full(len(weights), np.nan)
+    )
+
+    if within_dists:
+        w_point = float(diag.values["within_family_alpha"])
+        w_theta = float(np.nanmean(within_thetas)) if method == "bca" else None
+        w_jack = _nanmean_rows(np.column_stack(within_jacks)) if method == "bca" else None
+        groups["within_family"] = (w_point, w_dist, w_theta, w_jack)
+
+    if between_dists:
+        b_point = float(diag.values["between_family_alpha"])
+        b_theta = float(np.nanmean(between_thetas)) if method == "bca" else None
+        b_jack = _nanmean_rows(np.column_stack(between_jacks)) if method == "bca" else None
+        groups["between_family"] = (b_point, b_dist, b_theta, b_jack)
+
+    if within_dists and between_dists:
+        g_point = float(diag.values["family_gap"])
+        g_dist = w_dist - b_dist
+        g_theta = (
+            groups["within_family"][2] - groups["between_family"][2]
+            if method == "bca"
+            and groups["within_family"][2] is not None
+            and groups["between_family"][2] is not None
+            else None
+        )
+        g_jack = (
+            groups["within_family"][3] - groups["between_family"][3]
+            if method == "bca"
+            and groups["within_family"][3] is not None
+            and groups["between_family"][3] is not None
+            else None
+        )
+        groups["family_gap"] = (g_point, g_dist, g_theta, g_jack)
+
+    for key, (pt, dist, th_opt, jk_opt) in groups.items():
+        if not math.isfinite(pt):
+            out[key] = Interval(
+                estimate=key,
+                point=pt,
+                low=np.nan,
+                high=np.nan,
+                n_resamples=len(weights),
+                n_failed=int(np.isnan(dist).sum()),
+                undefined_reason="point estimate is undefined",
+                distribution=dist,
+                method_used=method,
+            )
+            continue
+        if method == "percentile" or th_opt is None or jk_opt is None:
+            out[key] = percentile_interval(key, pt, dist, confidence)
+        else:
+            iv = bca_interval(key, pt, dist, th_opt, jk_opt, confidence)
+            out[key] = with_fallback(iv, confidence, on_undefined)
+    return out
 
 
 def coder_jackknife(
