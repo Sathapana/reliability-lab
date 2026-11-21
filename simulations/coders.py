@@ -127,8 +127,8 @@ def replicate(
         boot_seed = int(np.random.default_rng([*seed, 7]).integers(0, 2**63 - 1))
         intervals = {
             scheme: result.bootstrap(
-                scheme=scheme,  # type: ignore[arg-type]
-                level="unit" if scheme == "units" else None,  # type: ignore[arg-type]
+                scheme=scheme,
+                level="unit" if scheme == "units" else None,
                 n_resamples=n_resamples,
                 random_state=boot_seed,
             )["as_missing"]

@@ -18,6 +18,12 @@ from reliability_lab.exceptions import (
     UndefinedAlphaError,
 )
 from reliability_lab.llm import TraceSidecar
+from reliability_lab.planning import (
+    SampleSizePlan,
+    plan_alpha,
+    plan_krippendorff,
+    plan_non_inferiority,
+)
 from reliability_lab.report import (
     AlphaEstimate,
     AlphaResult,
@@ -62,6 +68,7 @@ __all__ = [
     "ReliabilityLabError",
     "ReliabilityStudy",
     "ReliabilityWarning",
+    "SampleSizePlan",
     "SchemaError",
     "SplitManifest",
     "Status",
@@ -70,5 +77,8 @@ __all__ = [
     "UndefinedAlphaError",
     "__version__",
     "circular",
+    "plan_alpha",
+    "plan_krippendorff",
+    "plan_non_inferiority",
     "simulate_ratings",
 ]

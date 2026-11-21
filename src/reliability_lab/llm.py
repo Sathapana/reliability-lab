@@ -23,6 +23,8 @@ import pandas as pd
 from reliability_lab.data import (
     ArrowStreamExportable,
     _as_pandas,
+    _clean_column,
+    _is_missing,
     _plain,
     canonical_text,
     fingerprint_rows,
@@ -123,7 +125,7 @@ class TraceSidecar:
             )
         fields = tuple(f for f in TRACE_FIELDS if mapping[f] is not None)
         data = pd.DataFrame(
-            {f: df[mapping[f]].to_numpy(dtype=object, copy=True) for f in fields},
+            {f: _clean_column(df[mapping[f]]) for f in fields},
             index=pd.Index([_plain(c) for c in conditions], dtype=object, name="condition_id"),
         )
         if "temperature" in fields:
@@ -163,7 +165,7 @@ class TraceSidecar:
         if field not in self._fields or condition not in self._data.index:
             return None
         value = _plain(self._data.at[condition, field])
-        return None if value is None or (isinstance(value, float) and math.isnan(value)) else value
+        return None if _is_missing(value) else value
 
     def rows(self, conditions: Iterable[Any] | None = None) -> pd.DataFrame:
         """The trace rows of ``conditions`` (all when None) that the sidecar holds."""
@@ -192,7 +194,7 @@ class TraceSidecar:
 
 
 def _as_bool(value: Any) -> bool | None:
-    if value is None or (isinstance(value, float) and math.isnan(value)):
+    if _is_missing(value):
         return None
     if isinstance(value, bool | np.bool_):
         return bool(value)
@@ -205,7 +207,7 @@ def _as_bool(value: Any) -> bool | None:
 
 
 def _as_order(value: Any) -> tuple[str, ...] | None:
-    if value is None or (isinstance(value, float) and math.isnan(value)):
+    if _is_missing(value):
         return None
     labels = (
         [part.strip() for part in value.split(",")]

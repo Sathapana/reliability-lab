@@ -45,7 +45,7 @@ TRACE_COLUMNS = {
 def ratings_columns() -> dict[str, list[Any]]:
     """Every field, with failed attempts (no value), retries and an abstention."""
     rng = np.random.default_rng(3)
-    rows = []
+    rows: list[tuple[int, str, int | None, str, int]] = []
     for u in range(12):
         truth = int(rng.integers(1, 4))
         for prompt in ("p1", "p2", "p3"):
@@ -147,6 +147,12 @@ def test_arrow_tables_give_the_same_ratings_as_pandas(source: str) -> None:
 
     assert ratings.fingerprint() == expected_ratings.fingerprint()
     assert trace.fingerprint() == expected_trace.fingerprint()
+    observed = ratings.observed_values()
+    assert observed == [1, 2, 3]
+    assert all(type(v) is int for v in observed)
+    assert type(trace.value("p1", "seed")) is int
+    assert trace.value("p1", "seed") == 7
+    assert trace.value("p2", "seed") is None
     assert trace.value("p2", "deterministic") is None
     assert trace.value("p1", "candidate_order") == ("A", "B")
 
@@ -158,6 +164,7 @@ def test_a_study_from_arrow_tables_gives_the_same_alpha(source: str) -> None:
     result = study_of(make(ratings_columns()), make(trace_columns())).alpha()
     for name, estimate in expected.estimates.items():
         assert result[name].alpha == estimate.alpha
+    assert expected.provenance is not None and result.provenance is not None
     assert result.provenance.ratings_fingerprint == expected.provenance.ratings_fingerprint
 
 

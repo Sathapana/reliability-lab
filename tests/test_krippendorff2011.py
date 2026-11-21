@@ -126,7 +126,7 @@ def test_an_unused_rank_does_not_change_ordinal_alpha() -> None:
 def test_standardised_ordinal_differences_give_the_same_alpha() -> None:
     def standardised(values: Any, marginals: Any) -> Any:
         d = ORDINAL.fn(values, marginals)
-        return d / d.max()
+        return d / np.max(d)
 
     distance = Distance("ordinal_standardised", standardised, depends_on_marginals=True)
     alpha = human_study(F4["matrix"], distance, F4["values"]).alpha().alpha

@@ -1,15 +1,15 @@
 """Builders shared by the tests."""
 
-from collections.abc import Hashable, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from reliability_lab import RatingFrame, ReliabilityStudy
+from reliability_lab import Distance, RatingFrame, ReliabilityStudy
 
 
-def long_from_matrix(matrix: dict[Hashable, Sequence[Any]]) -> pd.DataFrame:
+def long_from_matrix(matrix: Mapping[Any, Sequence[Any]]) -> pd.DataFrame:
     """Coders x units matrix (``None`` = missing) to long form, dropping missing cells."""
     rows = [
         {"unit": u, "coder": coder, "value": v}
@@ -21,7 +21,10 @@ def long_from_matrix(matrix: dict[Hashable, Sequence[Any]]) -> pd.DataFrame:
 
 
 def human_study(
-    matrix: dict[Hashable, Sequence[Any]], level: str, values: Sequence[Any], **kwargs: Any
+    matrix: Mapping[Any, Sequence[Any]],
+    level: str | Distance,
+    values: Sequence[Any],
+    **kwargs: Any,
 ) -> ReliabilityStudy:
     ratings = RatingFrame.from_long(
         long_from_matrix(matrix), unit="unit", rater="coder", value="value"
@@ -42,16 +45,16 @@ def random_matrix(
     n_units: int,
     values: Sequence[Any],
     p_missing: float,
-) -> dict[Hashable, list[Any]]:
+) -> dict[Any, list[Any]]:
     """Random ratings with missing cells; each unit leans towards one value."""
-    matrix: dict[Hashable, list[Any]] = {f"c{i}": [] for i in range(n_coders)}
+    matrix: dict[Any, list[Any]] = {f"c{i}": [] for i in range(n_coders)}
     for _ in range(n_units):
-        anchor = rng.integers(len(values))
+        anchor = int(rng.integers(len(values)))
         for coder in matrix:
             if rng.random() < p_missing:
                 matrix[coder].append(None)
             elif rng.random() < 0.6:
                 matrix[coder].append(values[anchor])
             else:
-                matrix[coder].append(values[rng.integers(len(values))])
+                matrix[coder].append(values[int(rng.integers(len(values)))])
     return matrix

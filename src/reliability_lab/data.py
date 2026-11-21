@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import math
 from collections.abc import Hashable, Iterable
 from enum import StrEnum
 from typing import Any, Protocol
@@ -57,9 +58,26 @@ def _plain(x: Any) -> Any:
     return x.item() if isinstance(x, np.generic) else x
 
 
+def _is_missing(x: Any) -> bool:
+    """True for None, pd.NA, pd.NaT and NaN floats."""
+    if x is None or x is pd.NA or x is pd.NaT:
+        return True
+    return isinstance(x, float | np.floating) and math.isnan(float(x))
+
+
+def _clean_column(series: pd.Series[Any]) -> npt.NDArray[Any]:
+    """Copy a Series to a numpy array, turning pd.NA / pd.NaT into None."""
+    if isinstance(series.dtype, pd.api.extensions.ExtensionDtype):
+        return np.array([None if _is_missing(v) else _plain(v) for v in series], dtype=object)
+    arr = np.asarray(series.to_numpy(copy=True))
+    if arr.dtype == object:
+        return np.array([None if _is_missing(v) else _plain(v) for v in arr], dtype=object)
+    return arr
+
+
 def canonical_text(x: Any) -> str:
     """Stable text for fingerprints: missing is empty, integral floats print as ints."""
-    if x is None or (not isinstance(x, str) and bool(pd.isna(x))):
+    if _is_missing(x):
         return ""
     x = _plain(x)
     if isinstance(x, float) and x.is_integer():
@@ -99,7 +117,8 @@ def _arrow_to_pandas(table: Any) -> pd.DataFrame:
     """pyarrow's default conversion: missing values become None or NaN, never pd.NA.
 
     pyarrow before 23 cannot convert dictionaries with unsigned indices (polars
-    categoricals), so their indices are cast to int64 first.
+    categoricals), so their indices are cast to int64 first. Integer columns
+    with nulls stay Python ints and None instead of being promoted to float64.
     """
     pa = _import_pyarrow("converting an Arrow table")
     for i, column in enumerate(table.columns):
@@ -112,6 +131,9 @@ def _arrow_to_pandas(table: Any) -> pd.DataFrame:
             signed = pa.chunked_array(chunks, type=pa.dictionary(pa.int64(), kind.value_type))
             table = table.set_column(i, table.field(i).with_type(signed.type), signed)
     frame: pd.DataFrame = table.to_pandas()
+    for name, column in zip(table.column_names, table.columns, strict=True):
+        if pa.types.is_integer(column.type) and column.null_count > 0:
+            frame[name] = pd.Series(column.to_pylist(), index=frame.index, dtype=object)
     return frame
 
 
@@ -207,7 +229,7 @@ class RatingFrame:
             if column is None:
                 columns[field] = np.full(n, None, dtype=object)
             else:
-                columns[field] = df[column].to_numpy(copy=True)
+                columns[field] = _clean_column(df[column])
         data = pd.DataFrame(columns, index=df.index)
 
         for field in ("unit_id", "rater_id"):
@@ -237,14 +259,18 @@ class RatingFrame:
                 _require_constant_within(data, field, "unit_id")
         if "attempt" in declared:
             _require_complete(data, "attempt", attempt)
-            numeric = pd.to_numeric(data["attempt"], errors="coerce")
-            bad = data.index[numeric.isna()]
+            raw_attempt = data["attempt"]
+            is_bool = np.array([isinstance(v, bool | np.bool_) for v in raw_attempt], dtype=bool)
+            numeric = pd.to_numeric(raw_attempt, errors="coerce")
+            arr = numeric.to_numpy(dtype=float, na_value=np.nan)
+            valid = (~is_bool) & np.isfinite(arr) & (arr >= 1) & (np.floor(arr) == arr)
+            bad = data.index[~valid]
             if len(bad):
                 raise SchemaError(
-                    f"attempt (column {attempt!r}) must be numeric; {len(bad)} rows are not "
-                    f"{preview(bad)}"
+                    f"attempt (column {attempt!r}) must be numeric (a positive whole number); "
+                    f"{len(bad)} rows are not {preview(bad)}"
                 )
-            data["attempt"] = numeric
+            data["attempt"] = arr.astype(np.int64)
 
         is_llm = data["model_id"].notna()
         if is_llm.any():

@@ -424,12 +424,12 @@ TIMES = chr(0x00D7)
 TAU = chr(0x03C4)
 
 
-def _pct(x: float, digits: int = 1) -> str:
-    return MISSING if pd.isna(x) else f"{x:.{digits}%}"
+def _pct(x: Any, digits: int = 1) -> str:
+    return MISSING if pd.isna(x) else f"{float(x):.{digits}%}"
 
 
-def _num(x: float, digits: int = 3) -> str:
-    return MISSING if pd.isna(x) else f"{x:.{digits}f}"
+def _num(x: Any, digits: int = 3) -> str:
+    return MISSING if pd.isna(x) else f"{float(x):.{digits}f}"
 
 
 def _markdown(frame: pd.DataFrame) -> str:
@@ -550,7 +550,7 @@ def table_coders(data: pd.DataFrame) -> str:
 
 
 def run_info_text(info: dict[str, Any], data: pd.DataFrame) -> str:
-    grid = info.get("grid")
+    grid = str(info.get("grid", ""))
     truth = {"coders": "both_random", "paired": "true_delta"}.get(grid, "true_alpha")
     mc_error = data.drop_duplicates("cell")[f"{truth}_mc_error"].max()
     v = info["versions"]

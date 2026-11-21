@@ -205,7 +205,7 @@ class PairedCellResult:
                 "miss_above": float((defined["low"] > delta).mean()) if k else math.nan,
                 "mean_width": float((defined["high"] - defined["low"]).mean()),
                 "bias": float((group["point"].dropna() - delta).mean()),
-                "nominal_level": (1 - confidence) / 2,
+                "nominal_level": (1.0 - float(confidence)) / 2,  # type: ignore[arg-type]
                 **self.truth,
             }
             if self.scenario.kind == "margin":

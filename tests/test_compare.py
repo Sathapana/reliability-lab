@@ -155,7 +155,7 @@ def test_bca_comparison_matches_direct_scipy_calls() -> None:
     plan_b = cluster_plan(sample_b, "unit", strata=False, universe=plan_a.labels)
     k = plan_a.n_clusters
 
-    def arm(sample: StudySample, plan: ClusterPlan) -> Callable[[np.ndarray], np.ndarray]:
+    def arm(sample: StudySample, plan: ClusterPlan) -> Callable[..., np.ndarray]:
         clusters = cluster_coincidences(sample, "as_missing", plan)
         values = sample.inputs["as_missing"].values
 
@@ -169,7 +169,7 @@ def test_bca_comparison_matches_direct_scipy_calls() -> None:
     stat_a, stat_b = arm(sample_a, plan_a), arm(sample_b, plan_b)
 
     def stat_diff(idx: np.ndarray, axis: int = -1) -> np.ndarray:
-        return stat_b(idx, axis) - stat_a(idx, axis)
+        return np.asarray(stat_b(idx, axis) - stat_a(idx, axis))
 
     for statistic, interval in [
         (stat_a, diff.arm_a["as_missing"]),
@@ -186,3 +186,20 @@ def test_bca_comparison_matches_direct_scipy_calls() -> None:
         )
         assert interval.low == pytest.approx(direct.confidence_interval.low)
         assert interval.high == pytest.approx(direct.confidence_interval.high)
+
+
+@pytest.mark.filterwarnings("ignore::reliability_lab.BootstrapWarning")
+def test_comparison_exposes_provenance_and_arm_prefixed_warnings() -> None:
+    from reliability_lab import CategorySkewWarning
+
+    matrix = {
+        "r1": [1] * 36 + [2] * 4,
+        "r2": [1] * 36 + [1] * 3 + [2],
+        "r3": [1, 2] * 20,
+        "r4": [1, 2] * 20,
+    }
+    study = study_of(matrix)
+    with pytest.warns(CategorySkewWarning, match=r"^arm a: "):
+        diff = study.compare(A, B, n_resamples=30, random_state=1)
+    assert diff.provenance == diff.to_dict()["provenance"]
+    assert any(w.message.startswith("arm a: ") for w in diff.warnings)

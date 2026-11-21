@@ -227,6 +227,49 @@ The single-configuration designs (repeatability, prompt robustness, order robust
 
 Retried calls are never resolved silently. Number the attempts with an `attempt` column, then declare `retries="last"` or `retries="first_observed"`. Coverage then reports error rates both per attempt and for the attempts that count. See [`examples/llm_judge.py`](https://github.com/Sathapana/reliability-lab/blob/main/examples/llm_judge.py).
 
+## Sample-size planning
+
+Plan sample sizes either from Krippendorff's analytical two-coder nominal rule or by simulation under the package's latent-class generator (with common random numbers and a monotone probit power curve):
+
+```python
+from reliability_lab import plan_alpha, plan_krippendorff, plan_non_inferiority
+
+# Analytical nominal rule (Krippendorff, 2011, Table 1; Bloch & Kraemer, 1989)
+rule = plan_krippendorff(alpha_min=0.80, smallest_prevalence=0.25, significance=0.05)
+
+# Simulation planning for arbitrary metrics, multi-coder dependence, clusters, or missingness
+study_plan = plan_alpha(
+    "ordinal",
+    [1, 2, 3, 4, 5],
+    alpha=0.80,
+    alpha_min=0.667,
+    power=0.80,
+    n_coders=3,
+    random_state=42,
+)
+
+# Paired non-inferiority sample size (BCA at 96% confidence holds ~2.5% one-sided size)
+ni_plan = plan_non_inferiority(
+    "nominal",
+    ["a", "b", "c"],
+    alpha=0.80,
+    margin=0.05,
+    power=0.80,
+    random_state=42,
+)
+```
+
+## CLI quality gates
+
+Run CI reliability checks from the command line (`reliability-lab` or `python -m reliability_lab`) with a TOML study specification and CSV, TSV, or Parquet logs:
+
+```bash
+reliability-lab evaluate study.toml ratings.csv --min-alpha 0.70 --min-low 0.65 --strict --output report.json
+reliability-lab compare study.toml ratings.parquet --a condition_id=baseline --b condition_id=candidate --margin 0.05 --test non_inferiority --output comparison.json
+```
+
+Thresholds and comparison verdicts apply across every reported missing-data policy unless `--policy` selects one (`as_missing`, `as_category`, `sensitivity_pessimistic`, `sensitivity_optimistic`, or `sensitivity`). Exit codes are structured for CI: `0` pass, `1` usage/configuration/schema error, `2` threshold or verdict failure, and `3` passing thresholds with design or trace findings when `--strict` is set.
+
 ## Licence
 
 BSD-3-Clause. Alpha is implemented independently from Krippendorff's papers. The GPL-licensed `krippendorff` package is used only in the test suite, as a parity check.

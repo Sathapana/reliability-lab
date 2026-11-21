@@ -22,10 +22,30 @@ import numpy.typing as npt
 import pandas as pd
 
 from reliability_lab._version import __version__
-from reliability_lab.exceptions import ReliabilityLabError, ReliabilityWarning
+from reliability_lab.exceptions import (
+    BootstrapWarning,
+    CategorySkewWarning,
+    CoderDependenceWarning,
+    DomainSizeWarning,
+    ReliabilityLabError,
+    ReliabilityWarning,
+    TraceWarning,
+)
 
 if TYPE_CHECKING:
     from reliability_lab.inference import StudySample
+
+WARNING_CATEGORIES: dict[str, type[ReliabilityWarning]] = {
+    cls.__name__: cls
+    for cls in (
+        BootstrapWarning,
+        CategorySkewWarning,
+        CoderDependenceWarning,
+        DomainSizeWarning,
+        TraceWarning,
+        ReliabilityWarning,
+    )
+}
 
 Scheme = Literal["units", "kalpha", "coders", "two_way"]
 Level = Literal["unit", "group"]
@@ -678,16 +698,21 @@ class ComparisonResult:
         """Write each of :meth:`tables` as Parquet, plus ``result.json`` (needs pyarrow)."""
         return _write_parquet(self.tables(), self.to_dict(), directory)
 
-    def to_dict(self, include_distribution: bool = False) -> dict[str, Any]:
-        provenance = {
+    @property
+    def provenance(self) -> dict[str, Any]:
+        """Comparison provenance: each arm's provenance plus test declarations."""
+        out: dict[str, Any] = {
             arm: None if res.provenance is None else res.provenance.to_dict()
             for arm, res in (("a", self.result_a), ("b", self.result_b))
         }
-        provenance["declarations"] = {"margin": self.margin, "test": self.test}
+        out["declarations"] = {"margin": self.margin, "test": self.test}
+        return _jsonable(out)  # type: ignore[no-any-return]
+
+    def to_dict(self, include_distribution: bool = False) -> dict[str, Any]:
         return _jsonable(  # type: ignore[no-any-return]
             {
                 **_header("comparison-result"),
-                "provenance": provenance,
+                "provenance": self.provenance,
                 "claim": self.claim,
                 "a": dict(self.a),
                 "b": dict(self.b),

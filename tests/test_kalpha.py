@@ -66,6 +66,7 @@ def test_replicates_below_minus_one_are_truncated() -> None:
     assert kalpha_replicates(pool, draws, redraws)[0] == -1
 
 
+@pytest.mark.filterwarnings("ignore:no interval for as_category")
 def test_kalpha_does_not_apply_at_perfect_agreement() -> None:
     matrix = {"a": [1, 2, 3, 1], "b": [1, 2, 3, 1]}
     result = human_study(matrix, "nominal", [1, 2, 3]).alpha()
@@ -83,7 +84,7 @@ def test_kalpha_result_metadata_and_bounds() -> None:
     assert (boot.scheme, boot.level, boot.n_clusters) == ("kalpha", None, None)
     assert "scheme kalpha" in boot.describe()
     dist = boot["as_missing"].distribution
-    assert dist.min() >= -1 and dist.max() <= 1
+    assert np.min(dist) >= -1 and np.max(dist) <= 1
     assert any("evalica" in note for note in boot.notes)
 
 

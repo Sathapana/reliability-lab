@@ -5,9 +5,11 @@ Run with ``uv run python examples/simulated.py``. Each level gets 300 units rate
 misses. The alphas printed vary around 0.8 from draw to draw.
 """
 
-from reliability_lab import ReliabilityStudy, circular, simulate_ratings
+from typing import Any
 
-LEVELS = [
+from reliability_lab import Distance, ReliabilityStudy, circular, simulate_ratings
+
+LEVELS: list[tuple[str | Distance, list[Any]]] = [
     ("nominal", ["cat", "dog", "bird", "fish"]),
     ("ordinal", [1, 2, 3, 4, 5]),
     ("interval", [1, 2, 3, 4, 5, 6, 7]),

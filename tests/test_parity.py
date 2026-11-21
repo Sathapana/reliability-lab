@@ -4,7 +4,7 @@
 test is skipped unless the package is importable (CI runs it in an isolated job).
 """
 
-from collections.abc import Hashable, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -22,7 +22,7 @@ LEVELS = ["nominal", "ordinal", "interval", "ratio"]
 VALUES = [1, 2, 3, 4, 5, 6]
 
 
-def random_matrices(seed: int, count: int = 20) -> list[dict[Hashable, list[Any]]]:
+def random_matrices(seed: int, count: int = 20) -> list[dict[Any, list[Any]]]:
     rng = np.random.default_rng(seed)
     return [
         random_matrix(rng, int(rng.integers(2, 7)), int(rng.integers(5, 60)), VALUES, 0.3)
@@ -30,11 +30,11 @@ def random_matrices(seed: int, count: int = 20) -> list[dict[Hashable, list[Any]
     ]
 
 
-def as_array(matrix: dict[Hashable, Sequence[Any]]) -> np.ndarray:
+def as_array(matrix: Mapping[Any, Sequence[Any]]) -> np.ndarray:
     return np.array([[np.nan if v is None else v for v in row] for row in matrix.values()], float)
 
 
-def ours(matrix: dict[Hashable, Sequence[Any]], level: str, values: Sequence[Any]) -> float:
+def ours(matrix: Mapping[Any, Sequence[Any]], level: str, values: Sequence[Any]) -> float:
     return human_study(matrix, level, values).alpha().alpha
 
 

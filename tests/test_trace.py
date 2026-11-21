@@ -290,3 +290,24 @@ def test_configuration_diff_and_wilson() -> None:
     assert low == pytest.approx(0.6041, abs=1e-4)
     assert high == pytest.approx(0.7810, abs=1e-4)
     assert all(np.isnan(x) for x in wilson(0, 0))
+
+
+def test_sidecar_handles_nullable_pandas_dtypes() -> None:
+    df = pd.DataFrame(
+        {
+            "condition": pd.Series(["p1", "p2"], dtype="string"),
+            "seed": pd.Series([7, pd.NA], dtype="Int64"),
+            "det": pd.Series([True, pd.NA], dtype="boolean"),
+            "order": pd.Series(["A,B", pd.NA], dtype="string"),
+        }
+    )
+    trace = TraceSidecar.from_frame(
+        df, condition="condition", seed="seed", deterministic="det", candidate_order="order"
+    )
+    assert type(trace.value("p1", "seed")) is int
+    assert trace.value("p1", "seed") == 7
+    assert trace.value("p2", "seed") is None
+    assert trace.value("p1", "deterministic") is True
+    assert trace.value("p2", "deterministic") is None
+    assert trace.value("p1", "candidate_order") == ("A", "B")
+    assert trace.value("p2", "candidate_order") is None

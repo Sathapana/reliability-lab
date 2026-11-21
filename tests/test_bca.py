@@ -228,6 +228,7 @@ def test_on_undefined_percentile_reports_the_percentile_interval() -> None:
     interval = boot["as_missing"]
     assert interval.defined and interval.method_used == "percentile"
     assert interval.fallback_reason == default["as_missing"].undefined_reason
+    assert interval.fallback_reason is not None
     assert "replicates are undefined" in interval.fallback_reason
     # The same BCa resamples, read as percentiles over the defined replicates.
     replicates = default["as_missing"].distribution
@@ -247,12 +248,13 @@ def test_on_undefined_percentile_reports_the_percentile_interval() -> None:
 def test_on_undefined_applies_to_comparisons() -> None:
     matrix = {**SKEWED, "c": ["x"] * 18 + ["y"] * 2, "d": ["x"] * 20}
     study = human_study(matrix, "nominal", ["x", "y"])
-    arms = {"a": {"rater_id": ["a", "b"]}, "b": {"rater_id": ["c", "d"]}}
+    arm_a = {"rater_id": ["a", "b"]}
+    arm_b = {"rater_id": ["c", "d"]}
     with pytest.warns(BootstrapWarning):
-        default = study.compare(**arms, method="bca", n_resamples=300, random_state=2)
+        default = study.compare(arm_a, arm_b, method="bca", n_resamples=300, random_state=2)
     with pytest.warns(BootstrapWarning):
         diff = study.compare(
-            **arms, method="bca", n_resamples=300, random_state=2, on_undefined="percentile"
+            arm_a, arm_b, method="bca", n_resamples=300, random_state=2, on_undefined="percentile"
         )
     for old, new in [
         (default["as_missing"], diff["as_missing"]),

@@ -170,3 +170,83 @@ def test_bad_arguments_are_refused(kwargs: dict[str, Any], match: str) -> None:
     arguments: dict[str, Any] = {"measurement": "ordinal", "values": [1, 2, 3]} | kwargs
     with pytest.raises(DesignError, match=match):
         simulate_ratings(**arguments)
+
+
+def test_hard_units_and_rho_keep_population_alpha() -> None:
+    alphas = [
+        _alpha(
+            "nominal",
+            ["a", "b", "c"],
+            seed,
+            n_units=250,
+            n_coders=4,
+            alpha=0.75,
+            hard_share=0.25,
+            hard_penalty=0.25,
+            rho=0.2,
+        )
+        for seed in range(20)
+    ]
+    assert np.mean(alphas) == pytest.approx(0.75, abs=0.03)
+
+
+def test_clustered_simulation_populates_group_id_and_cohesion() -> None:
+    rf = simulate_ratings(
+        "nominal",
+        ["a", "b", "c"],
+        n_units=60,
+        n_coders=3,
+        alpha=0.8,
+        cluster_size=5,
+        cohesion=0.6,
+        random_state=9,
+    )
+    frame = rf.to_frame()
+    assert frame["group_id"].notna().all()
+    assert frame["group_id"].nunique() == 12
+    assert (frame.groupby("group_id")["unit_id"].nunique() == 5).all()
+    study = ReliabilityStudy(
+        rf, measurement="nominal", values=["a", "b", "c"], coders="rater_id", design="human_panel"
+    )
+    boot = study.alpha().bootstrap(scheme="units", level="group", n_resamples=200, random_state=1)
+    assert boot.n_clusters == 12
+
+
+def test_informative_hard_failures_rate() -> None:
+    rf = simulate_ratings(
+        "nominal",
+        ["a", "b", "c"],
+        n_units=500,
+        n_coders=3,
+        alpha=0.8,
+        failures=0.05,
+        hard_share=0.2,
+        hard_penalty=0.25,
+        hard_failures=0.45,
+        random_state=15,
+    )
+    frame = rf.to_frame()
+    failed = frame["status"] == "parse_error"
+    expected_rate = 0.8 * 0.05 + 0.2 * 0.45
+    assert failed.mean() == pytest.approx(expected_rate, abs=0.03)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"hard_share": -0.1},
+        {"hard_share": 1.1},
+        {"hard_penalty": -0.1},
+        {"hard_penalty": 1.1},
+        {"cluster_size": 0},
+        {"cohesion": -0.1},
+        {"cohesion": 1.1},
+        {"rho": -0.1},
+        {"rho": 1.1},
+        {"hard_failures": -0.1},
+        {"hard_failures": 1.0},
+    ],
+)
+def test_extended_bad_arguments_are_refused(kwargs: dict[str, Any]) -> None:
+    with pytest.raises(DesignError):
+        simulate_ratings("nominal", ["a", "b", "c"], **kwargs)

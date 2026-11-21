@@ -220,6 +220,7 @@ def test_majority_breaks_ties_by_stratum_text() -> None:
     y, rule = _sample_strata(
         layout, "group", np.array(["g1", "g2"], dtype=object), np.array([0, 0, 0, 1, 1]), "majority"
     )
+    assert y is not None
     assert list(y) == ["b", "a"]
     assert rule == "majority"
 

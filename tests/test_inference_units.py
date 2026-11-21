@@ -1,5 +1,5 @@
 import json
-from collections.abc import Hashable, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -31,7 +31,7 @@ pytestmark = pytest.mark.filterwarnings("ignore::reliability_lab.CategorySkewWar
 
 
 def grouped_study(
-    matrix: dict[Hashable, Sequence[Any]],
+    matrix: Mapping[Any, Sequence[Any]],
     level: Any,
     values: Sequence[Any],
     groups: dict[int, str] | None = None,
@@ -51,7 +51,7 @@ def grouped_study(
     )
 
 
-def nested_study(level: Any, seed: int = 5) -> tuple[dict[Hashable, list[Any]], ReliabilityStudy]:
+def nested_study(level: Any, seed: int = 5) -> tuple[dict[Any, list[Any]], ReliabilityStudy]:
     """16 units in 8 groups of two, the groups nested in 2 strata."""
     matrix = random_matrix(np.random.default_rng(seed), 3, 16, VALUES, p_missing=0.2)
     groups = {u: f"g{u // 2}" for u in range(16)}

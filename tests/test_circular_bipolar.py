@@ -66,7 +66,7 @@ def test_hours_wrap_around_midnight() -> None:
     d = circular(24).matrix(HOURS, np.ones(24))
     assert d[23, 0] == pytest.approx(d[0, 1])
     assert d[0, 12] == pytest.approx(1.0)  # opposite hours are the farthest apart
-    assert d.max() == pytest.approx(1.0)
+    assert np.max(d) == pytest.approx(1.0)
 
 
 def test_rotating_every_value_leaves_circular_alpha_unchanged() -> None:
@@ -117,5 +117,5 @@ def test_bootstraps_and_sensitivity_run(level: str, measurement: Any, values: li
     )
     assert pessimistic <= optimistic
     for scheme in ("units", "two_way"):
-        boot = result.bootstrap(scheme=scheme, n_resamples=200, random_state=1)  # type: ignore[arg-type]
+        boot = result.bootstrap(scheme=scheme, n_resamples=200, random_state=1)
         assert boot["as_missing"].defined

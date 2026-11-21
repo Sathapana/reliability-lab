@@ -34,7 +34,7 @@ from reliability_lab.alpha import (
     check_domain_size,
     compute_alpha,
 )
-from reliability_lab.data import ERROR_STATUSES, RatingFrame, Status, _plain, preview
+from reliability_lab.data import ERROR_STATUSES, RatingFrame, Status, _is_missing, _plain, preview
 from reliability_lab.design import (
     SINGLE_CONFIGURATION,
     CoderSpec,
@@ -546,9 +546,13 @@ class ReliabilityStudy:
                 f"{len(only_a)} units appear only in a {preview(only_a)} and {len(only_b)} only "
                 f"in b {preview(only_b)}. Filter the ratings to the shared units first."
             )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ReliabilityWarning)
+            result_a = arm_a.alpha()
+            result_b = arm_b.alpha()
         result = compare_arms(
-            arm_a.alpha(),
-            arm_b.alpha(),
+            result_a,
+            result_b,
             a=dict(a),
             b=dict(b),
             n_resamples=n_resamples,
@@ -1028,7 +1032,7 @@ def _resolve_domain(values: Sequence[Any], distance: Distance) -> tuple[Any, ...
     domain = tuple(_plain(v) for v in values)
     if len(domain) < 2:
         raise DesignError("the value domain needs at least two values")
-    if any(v is None or (isinstance(v, float) and math.isnan(v)) for v in domain):
+    if any(_is_missing(v) for v in domain):
         raise DesignError("values cannot contain missing values; use the status column instead")
     try:
         distinct = len(set(domain))

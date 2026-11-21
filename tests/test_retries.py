@@ -103,6 +103,11 @@ def test_retries_must_be_declared_and_well_formed() -> None:
     bad.loc[0, "attempt"] = "first"
     with pytest.raises(SchemaError, match=r"attempt .* must be numeric"):
         ratings_of(bad)
+    for invalid in (0, -1, 1.5, True, float("inf")):
+        bad_val = retried_log().astype({"attempt": object})
+        bad_val.loc[0, "attempt"] = invalid
+        with pytest.raises(SchemaError, match=r"attempt .* must be numeric"):
+            ratings_of(bad_val)
 
 
 def test_runs_are_not_mistaken_for_retries() -> None:

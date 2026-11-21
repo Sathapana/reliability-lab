@@ -9,8 +9,8 @@ their pairs one by one, leaving out pairs between copies of one coder.
 """
 
 import math
-from collections import Counter
-from collections.abc import Hashable, Sequence
+from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from itertools import combinations
 from typing import Any
 
@@ -19,7 +19,7 @@ from reference import components_from_coincidences, reference_alpha, reference_c
 
 
 def naive_two_way_alpha(
-    matrix: dict[Hashable, Sequence[Any]],
+    matrix: Mapping[Any, Sequence[Any]],
     level: str,
     values: Sequence[Any],
     unit_weights: Sequence[int],
@@ -32,7 +32,7 @@ def naive_two_way_alpha(
     as in Krippendorff's 1/(m_u - 1) when no coder is copied.
     """
     rows = list(matrix.values())
-    o: Counter[tuple[Any, Any]] = Counter()
+    o: dict[tuple[Any, Any], float] = defaultdict(float)
     for u, unit_copies in enumerate(unit_weights):
         copies = [
             (j, row[u])
@@ -52,7 +52,7 @@ def naive_two_way_alpha(
 
 
 def naive_units_alphas(
-    matrix: dict[Hashable, Sequence[Any]],
+    matrix: Mapping[Any, Sequence[Any]],
     level: str,
     values: Sequence[Any],
     cluster_of_unit: dict[int, int],
@@ -66,7 +66,7 @@ def naive_units_alphas(
     n_units = len(next(iter(matrix.values())))
     out = []
     for w in weights:
-        expanded: dict[Hashable, list[Any]] = {c: [] for c in coders}
+        expanded: dict[Any, list[Any]] = {c: [] for c in coders}
         for u in range(n_units):
             if u not in cluster_of_unit:
                 continue
@@ -78,12 +78,12 @@ def naive_units_alphas(
 
 
 def reference_pair_errors(
-    matrix: dict[Hashable, Sequence[Any]], level: str, values: Sequence[Any]
+    matrix: Mapping[Any, Sequence[Any]], level: str, values: Sequence[Any]
 ) -> list[float]:
     """E(r) = 2 delta² / (n D_e) for every unordered pair of values within a unit."""
     ref = reference_components(matrix, level, values)
     n_units = len(next(iter(matrix.values())))
-    errors = []
+    errors: list[float] = []
     for u in range(n_units):
         unit = [row[u] for row in matrix.values() if row[u] is not None]
         if len(unit) < 2:

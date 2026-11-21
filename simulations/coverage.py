@@ -154,10 +154,10 @@ def rate(
 
     def guesses(size: tuple[int, ...]) -> np.ndarray:
         if s.measurement == "nominal":
-            return rng.choice(n_values, size=size, p=np.asarray(s.prevalence))
+            return np.asarray(rng.choice(n_values, size=size, p=np.asarray(s.prevalence)))
         shifts, p = ORDINAL_SHIFTS
         base = np.broadcast_to(truth[:, None] if len(size) == 2 else truth, size)
-        return np.clip(base + rng.choice(shifts, size=size, p=p), 0, n_values - 1)
+        return np.asarray(np.clip(base + rng.choice(shifts, size=size, p=p), 0, n_values - 1))
 
     knows = rng.random((n_units, m)) < accuracy
     own = guesses((n_units, m))

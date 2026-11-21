@@ -116,7 +116,7 @@ A calibrated interval (a bootstrap-t, or a double bootstrap that sets the level 
 
 **Sample-size planning (2.3).** A new `planning.py`; `design.py` holds coder definitions and design labels. The draft's inputs (target alpha, marginals, number of coders) do not determine how ratings are generated, so each plan names its generator:
 
-1. For nominal data, the minimum-sample-size rule in Krippendorff's *Content Analysis*: the number of values needed for a given minimum alpha, smallest category probability and significance level. The exact table and edition are to be verified before building.
+1. For nominal data, the minimum-sample-size rule in Krippendorff's *Content Analysis* (2nd ed. 2004, Table 11.1; 3rd ed. 2013, p. 323; 4th ed. 2019, Table 12.3) and Krippendorff (2011, Table 1, eq. via Bloch & Kraemer, 1989, eq. 3.7): the number of values needed for a given minimum alpha, smallest category probability and significance level.
 2. For every metric, simulation with the latent-class "know or guess" generator of `simulations/`. That generator moves into the package, because the wheel ships `src/reliability_lab` only. The search over N uses common random numbers and a monotone fit, because a plain binary search on noisy power estimates can stop on noise.
 3. The same machinery plans the non-inferiority test of 0.2.0: the number of units needed to show non-inferiority at margin δ when the true difference is zero.
 
@@ -252,7 +252,7 @@ At 95%, the paired intervals of `compare()` miss about 0.25 points too often per
 
 ## References
 
-1. Krippendorff, K. *Content Analysis: An Introduction to Its Methodology.* Sage. Minimum-sample-size rule; edition and table to be verified.
+1. Krippendorff, K. *Content Analysis: An Introduction to Its Methodology.* Sage (2nd ed. 2004, Table 11.1; 3rd ed. 2013, p. 323; 4th ed. 2019, Table 12.3); Krippendorff, K. (2011). "Agreement and Information in the Reliability of Coding." *Communication Methods and Measures*, 5(2), 93–112, Table 1; Bloch, D. A., & Kraemer, H. C. (1989). "2 × 2 Kappa Coefficients: Measures of Agreement or Association." *Biometrics*, 45(1), 269–287, eq. 3.7.
 2. Owen, A. B. (2007). [The pigeonhole bootstrap](https://doi.org/10.1214/07-AOAS122). Annals of Applied Statistics 1(2).
 3. Calderon, N., Reichart, R., & Dror, R. (2025). [The Alternative Annotator Test for LLM-as-a-Judge](https://arxiv.org/pdf/2501.10970). ACL 2025.
 4. Gwet, K. L. (2008). [Computing inter-rater reliability and its variance in the presence of high agreement](https://doi.org/10.1348/000711006X126600). British Journal of Mathematical and Statistical Psychology 61(1).

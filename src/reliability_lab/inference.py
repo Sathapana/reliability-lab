@@ -36,8 +36,9 @@ from scipy import sparse, special, stats
 
 from reliability_lab.alpha import ORDINAL, Distance, compute_alpha, per_unit_coincidences
 from reliability_lab.data import preview
-from reliability_lab.exceptions import BootstrapWarning, DesignError
+from reliability_lab.exceptions import BootstrapWarning, DesignError, ReliabilityWarning
 from reliability_lab.report import (
+    WARNING_CATEGORIES,
     AlphaResult,
     BootstrapResult,
     ComparisonResult,
@@ -971,7 +972,11 @@ def compare(
         raise DesignError("both arms must report the same estimates")
     seed = _seed(random_state)
     recorded = [
-        type(w)(w.category, f"arm {arm}: {w.message}")
+        emit(
+            WARNING_CATEGORIES.get(w.category, ReliabilityWarning),
+            f"arm {arm}: {w.message}",
+            stacklevel=3,
+        )
         for arm, res in (("a", result_a), ("b", result_b))
         for w in res.warnings
     ]

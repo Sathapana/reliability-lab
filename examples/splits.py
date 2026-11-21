@@ -65,37 +65,40 @@ def study_of(df: pd.DataFrame) -> ReliabilityStudy:
     )
 
 
-out = Path(tempfile.mkdtemp(prefix="reliability-lab-"))
-study = study_of(judge_log("prompt_v1", seed=1))
+with tempfile.TemporaryDirectory(prefix="reliability-lab-") as tmpdir:
+    out = Path(tmpdir)
+    study = study_of(judge_log("prompt_v1", seed=1))
 
-# 1. One fold of StratifiedGroupKFold(4) is an approximate 25% stratified group holdout.
-dev, test = study.holdout(StratifiedGroupKFold(n_splits=4, shuffle=True, random_state=7))
-test.save_manifest(out / "split.json")
-assert test.manifest is not None
-print("realised split:", test.manifest.realised)
+    # 1. One fold of StratifiedGroupKFold(4) is an approximate 25% stratified group holdout.
+    dev, test = study.holdout(StratifiedGroupKFold(n_splits=4, shuffle=True, random_state=7))
+    test.save_manifest(out / "split.json")
+    assert test.manifest is not None
+    print("realised split:", test.manifest.realised)
 
-# ... tune the judge on `dev` only, then freeze it ...
+    # ... tune the judge on `dev` only, then freeze it ...
 
-# 2. Alpha on the test partition; the bootstrap resamples whole conversations.
-result = test.alpha()
-boot = result.bootstrap(scheme="units", n_resamples=2000, random_state=7)
-print()
-print(boot.summary())
+    # 2. Alpha on the test partition; the bootstrap resamples whole conversations.
+    result = test.alpha()
+    boot = result.bootstrap(scheme="units", n_resamples=2000, random_state=7)
+    print()
+    print(boot.summary())
 
-# 3. Reports: strict JSON with provenance, and tidy Parquet tables.
-result.to_json(out / "alpha_test.json")
-boot.to_parquet(out / "bootstrap_test")
-print("\nprovenance gaps:", *result.provenance.gaps if result.provenance else [], sep="\n  - ")
+    # 3. Reports: strict JSON with provenance, and tidy Parquet tables.
+    result.to_json(out / "alpha_test.json")
+    boot.to_parquet(out / "bootstrap_test")
+    print("\nprovenance gaps:", *result.provenance.gaps if result.provenance else [], sep="\n  - ")
 
-# 4. The same split, by its saved ids, on a later log with a new prompt.
-later = study_of(judge_log("prompt_v2", seed=2))
-_, later_test = later.apply_manifest(out / "split.json")
-print(f"\nprompt_v2 alpha on the same test units: {later_test.alpha().alpha:.3f}")
+    # 4. The same split, by its saved ids, on a later log with a new prompt.
+    later = study_of(judge_log("prompt_v2", seed=2))
+    _, later_test = later.apply_manifest(out / "split.json")
+    print(f"\nprompt_v2 alpha on the same test units: {later_test.alpha().alpha:.3f}")
 
-few_shot = sorted(set(dev.ratings.to_frame()["unit_id"]))[:3]
-test.manifest.assert_no_leakage(few_shot)
-try:
-    test.manifest.assert_no_leakage([*few_shot, sorted(set(test.ratings.to_frame()["unit_id"]))[0]])
-except LeakageError as err:
-    print(f"\nleakage caught: {err}")
-print(f"\nfiles written to {out}")
+    few_shot = sorted(set(dev.ratings.to_frame()["unit_id"]))[:3]
+    test.manifest.assert_no_leakage(few_shot)
+    try:
+        test.manifest.assert_no_leakage(
+            [*few_shot, sorted(set(test.ratings.to_frame()["unit_id"]))[0]]
+        )
+    except LeakageError as err:
+        print(f"\nleakage caught: {err}")
+    print(f"\nfiles written to {out}")

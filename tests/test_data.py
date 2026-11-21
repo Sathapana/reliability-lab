@@ -104,3 +104,41 @@ def test_llm_mask() -> None:
         df, unit="item", rater="who", value="score", model_id="m", condition_id="c"
     )
     assert ratings.is_llm.all()
+
+
+def test_nullable_pandas_extension_dtypes_normalise_pd_na() -> None:
+    from reliability_lab import DesignError, ReliabilityStudy
+
+    df = pd.DataFrame(
+        {
+            "item": pd.Series(["u1", "u1", "u2", "u2", "u3", "u3"], dtype="string"),
+            "who": pd.Series(["a", "b", "a", "b", "a", "b"], dtype="string"),
+            "score": pd.Series([1, 1, 2, pd.NA, 2, 2], dtype="Int64"),
+            "status": pd.Series(
+                ["observed", "observed", "observed", "parse_error", "observed", "observed"],
+                dtype="string",
+            ),
+        }
+    )
+    ratings = RatingFrame.from_long(df, unit="item", rater="who", value="score", status="status")
+    observed = ratings.observed_values()
+    assert observed == [1, 2]
+    assert all(type(v) is int for v in observed)
+    result = ReliabilityStudy(
+        ratings,
+        measurement="nominal",
+        values=[1, 2],
+        coders="rater_id",
+        design="human_panel",
+    ).alpha()
+    assert result["as_missing"].n_pairable_values == 4
+    assert result["as_category"].n_pairable_values == 6
+
+    with pytest.raises(DesignError, match="missing values"):
+        ReliabilityStudy(
+            ratings,
+            measurement="nominal",
+            values=[1, pd.NA],
+            coders="rater_id",
+            design="human_panel",
+        )

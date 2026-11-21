@@ -1,6 +1,7 @@
 import math
 
 import numpy as np
+import pandas as pd
 import pytest
 from fixtures.krippendorff2011 import EXAMPLES, FOUR_CODERS_MISSING
 from helpers import human_study, random_matrix
@@ -41,10 +42,10 @@ def test_four_coder_example_white_box() -> None:
     np.testing.assert_allclose(o, o.T)
     np.testing.assert_allclose(est.per_unit["d_o_contribution"].sum(), est.d_o)
     assert est.n_unpairable_units == 1
-    unit12 = est.per_unit.set_index("unit_id").loc[11]
-    assert unit12["pairable_values"] == 1
-    assert math.isnan(unit12["disagreement"])
-    assert unit12["d_o_contribution"] == 0
+    table = est.per_unit.set_index("unit_id")
+    assert table.at[11, "pairable_values"] == 1
+    assert pd.isna(table.at[11, "disagreement"])
+    assert table.at[11, "d_o_contribution"] == 0
     # Observed agreement: the share of pairable value pairs that match exactly.
     assert est.observed_agreement == pytest.approx(np.trace(o) / 40)
 
@@ -66,7 +67,11 @@ def test_engine_matches_reference_on_random_data(level: str) -> None:
 
 
 def test_perfect_agreement_gives_one() -> None:
-    matrix = {"a": [1, 2, 3, 1], "b": [1, 2, 3, 1], "c": [1, None, 3, 1]}
+    matrix: dict[str, list[int | None]] = {
+        "a": [1, 2, 3, 1],
+        "b": [1, 2, 3, 1],
+        "c": [1, None, 3, 1],
+    }
     for level in LEVELS:
         assert human_study(matrix, level, [1, 2, 3]).alpha().alpha == pytest.approx(1.0)
 
