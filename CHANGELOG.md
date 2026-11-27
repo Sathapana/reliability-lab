@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0
 
 Kappas, Intraclass Correlation Coefficients (ICC), and Generalizability Theory.
 
