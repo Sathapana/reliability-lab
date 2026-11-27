@@ -16,7 +16,7 @@ Two decisions shape the order:
 | 0.2.0 (shipped) | Decisions on a configuration change | Non-inferiority and equivalence in `compare()` (2.2); BCa failure reasons and opt-in fallback (1.2); category-skew diagnostic (1.3); unit triage (1.4) | At `confidence=0.96`, rejection at the margin holds 2.5%; at 0.95 it is measured and reported (revised 30 Oct 2026, see the 0.2.0 gate); a test for each BCa failure cause |
 | 0.3.0 (shipped) | Planning, CI gates and Arrow input | Sample-size planning (2.3); CLI quality gates (4.2); Arrow input (4.1) | Planned sizes reach their stated power on fresh seeds; CLI runs the example fixtures end to end; polars, DuckDB and pyarrow inputs give the same ratings fingerprint as pandas |
 | 0.4.0 (shipped) | Judge bias evidence | Within- and between-family alpha (3.2); unit covariates for length bias and self-enhancement (3.2); call telemetry, reduced (3.3) | Simulated same-family errors detected; fixtures for each diagnostic |
-| 0.5.0 | Companion coefficients and plots | `metrics/` with Gwet's AC1 and AC2 (1.3); plotting extra (4.3) | Parity with irrCAC |
+| 0.5.0 (shipped) | Companion coefficients and plots | `metrics/` with Gwet's AC1 and AC2 (1.3); plotting extra (4.3) | Parity with irrCAC |
 | 1.0.0 | Human-LLM alignment and a stable release | Mixed panels; alignment averaged over individual annotators and against a consensus label (3.1); stable API; frozen report schema; coverage simulations for interval, ratio and mixed-panel data | Mixed-panel end-to-end fixture with hand-checked values; paired intervals checked against a naive loop; reports from 1.0 read back by later releases; guidance regenerated from full-size runs |
 | Research | Crossed intervals | A less conservative alternative to `two_way` (2.1) | Beats `two_way` on the coders grid |
 | Research | A calibrated paired interval | A bootstrap-t or double bootstrap for `compare()` | Holds 2.5% at the margin at 95% on the paired grid |
@@ -179,6 +179,8 @@ The library still only summarises logs and never calls providers (framing, non-g
 **Gate.** Simulated same-family correlated errors (the existing correlated-errors process) give higher within-family than between-family alpha. Fixtures cover each diagnostic and the unit-sidecar checks.
 
 ## 0.5.0: Companion coefficients and plots
+
+Shipped in 0.5.0: every item below, with its gate passed.
 
 **`metrics/` (1.3).** Gwet's AC1 (nominal) and AC2 (weighted) open the module the framing planned for later coefficients. They are reported as separate, labelled coefficients, never as diagnostics of alpha. They take the same declarations (the distance gives the weights) and the same missing-data policies. Kappas and ICC follow in the same module. G-theory variance components (2.1) belong with ICC, since they are the variance decomposition ICC is built from.
 
