@@ -15,7 +15,7 @@ Two decisions shape the order:
 | --- | --- | --- | --- |
 | 0.2.0 (shipped) | Decisions on a configuration change | Non-inferiority and equivalence in `compare()` (2.2); BCa failure reasons and opt-in fallback (1.2); category-skew diagnostic (1.3); unit triage (1.4) | At `confidence=0.96`, rejection at the margin holds 2.5%; at 0.95 it is measured and reported (revised 30 Oct 2026, see the 0.2.0 gate); a test for each BCa failure cause |
 | 0.3.0 (shipped) | Planning, CI gates and Arrow input | Sample-size planning (2.3); CLI quality gates (4.2); Arrow input (4.1) | Planned sizes reach their stated power on fresh seeds; CLI runs the example fixtures end to end; polars, DuckDB and pyarrow inputs give the same ratings fingerprint as pandas |
-| 0.4.0 | Judge bias evidence | Within- and between-family alpha (3.2); unit covariates for length bias and self-enhancement (3.2); call telemetry, reduced (3.3) | Simulated same-family errors detected; fixtures for each diagnostic |
+| 0.4.0 (shipped) | Judge bias evidence | Within- and between-family alpha (3.2); unit covariates for length bias and self-enhancement (3.2); call telemetry, reduced (3.3) | Simulated same-family errors detected; fixtures for each diagnostic |
 | 0.5.0 | Companion coefficients and plots | `metrics/` with Gwet's AC1 and AC2 (1.3); plotting extra (4.3) | Parity with irrCAC |
 | 1.0.0 | Human-LLM alignment and a stable release | Mixed panels; alignment averaged over individual annotators and against a consensus label (3.1); stable API; frozen report schema; coverage simulations for interval, ratio and mixed-panel data | Mixed-panel end-to-end fixture with hand-checked values; paired intervals checked against a naive loop; reports from 1.0 read back by later releases; guidance regenerated from full-size runs |
 | Research | Crossed intervals | A less conservative alternative to `two_way` (2.1) | Beats `two_way` on the coders grid |
@@ -159,6 +159,8 @@ The result records the generator and its parameters, and the documentation says 
 **Gate.** Planned sample sizes reach their stated power when re-simulated with fresh seeds. CLI tests run the example fixtures end to end and check exit codes and the JSON report. The same ratings passed as pandas, polars, DuckDB and pyarrow give the same ratings fingerprint.
 
 ## 0.4.0: Judge bias evidence
+
+Shipped in 0.4.0: every item below, with its gate passed.
 
 **Within- and between-family alpha (3.2).** For `inter_model`, pairwise alpha within model families and between them, from `model_family` in the ratings. That field is constant per `model_id`; the trace records `provider`, not family. This turns today's `CoderDependenceWarning` into a number. Intervals use the units scheme, paired with the overall alpha.
 
