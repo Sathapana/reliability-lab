@@ -1,4 +1,4 @@
-"""Companion reliability coefficients (Gwet's AC1 and AC2)."""
+"""Companion reliability coefficients (Gwet's AC1/AC2, Kappas, ICC, and G-theory)."""
 
 from __future__ import annotations
 
@@ -12,14 +12,68 @@ from reliability_lab.metrics.gwet import (
     gwet_weight_matrix,
     resolve_gwet_weights,
 )
+from reliability_lab.metrics.icc import (
+    GTHEORY_COEFFICIENTS,
+    ICC_AGREEMENTS,
+    ICC_MODELS,
+    ICC_UNITS,
+    GTheoryCoefficient,
+    GTheoryEstimate,
+    GTheoryResult,
+    ICCAgreement,
+    ICCComputation,
+    ICCEstimate,
+    ICCModel,
+    ICCResult,
+    ICCUnit,
+    VarianceComponents,
+    compute_icc,
+    compute_variance_components,
+    g_theory,
+    icc,
+)
+from reliability_lab.metrics.kappa import (
+    KAPPA_VARIANTS,
+    KappaComputation,
+    KappaEstimate,
+    KappaResult,
+    KappaVariant,
+    compute_kappa,
+    kappa,
+)
 
 __all__ = [
+    "GTHEORY_COEFFICIENTS",
     "GWET_WEIGHT_NAMES",
+    "ICC_AGREEMENTS",
+    "ICC_MODELS",
+    "ICC_UNITS",
+    "KAPPA_VARIANTS",
+    "GTheoryCoefficient",
+    "GTheoryEstimate",
+    "GTheoryResult",
     "GwetComputation",
     "GwetEstimate",
     "GwetResult",
+    "ICCAgreement",
+    "ICCComputation",
+    "ICCEstimate",
+    "ICCModel",
+    "ICCResult",
+    "ICCUnit",
+    "KappaComputation",
+    "KappaEstimate",
+    "KappaResult",
+    "KappaVariant",
+    "VarianceComponents",
     "compute_gwet",
+    "compute_icc",
+    "compute_kappa",
+    "compute_variance_components",
+    "g_theory",
     "gwet",
     "gwet_weight_matrix",
+    "icc",
+    "kappa",
     "resolve_gwet_weights",
 ]

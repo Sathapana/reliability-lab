@@ -134,3 +134,72 @@ def test_irrcac_gwet(level: str, weights: str) -> None:
         ):
             res_default = study.gwet()
             assert res_default.ac == pytest.approx(est["coefficient_value"], abs=1e-5)
+
+
+@pytest.mark.parametrize(
+    ("level", "weights"),
+    [
+        ("nominal", "identity"),
+        ("interval", "quadratic"),
+        ("ordinal", "ordinal"),
+        ("interval", "linear"),
+        ("interval", "radical"),
+        ("ratio", "ratio"),
+        ("bipolar", "bipolar"),
+        ("interval", "circular"),
+    ],
+)
+def test_irrcac_fleiss(level: str, weights: str) -> None:
+    raw = pytest.importorskip("irrCAC.raw")
+    for matrix in random_matrices(16, count=10):
+        units_by_raters = pd.DataFrame(as_array(matrix).T)
+        cac = raw.CAC(units_by_raters, weights=weights, categories=VALUES)
+        est = cac.fleiss()["est"]
+        study = human_study(matrix, level, VALUES)
+        res = study.kappa(variant="fleiss", weights=weights)
+        primary = res["as_missing"]
+        assert res.coefficient_name == est["coefficient_name"]
+        assert res.kappa == pytest.approx(est["coefficient_value"], abs=1e-5)
+        assert primary.pa == pytest.approx(est["pa"], abs=1e-5)
+        assert primary.pe == pytest.approx(est["pe"], abs=1e-5)
+        assert primary.se == pytest.approx(est["se"], abs=1e-5)
+        assert primary.z == pytest.approx(est["z"], abs=1e-5)
+        assert primary.p_value == pytest.approx(est["p_value"], abs=1e-5)
+        assert primary.low == pytest.approx(est["confidence_interval"][0], abs=1e-5)
+        assert primary.high == pytest.approx(est["confidence_interval"][1], abs=1e-5)
+
+
+@pytest.mark.parametrize(
+    ("level", "weights"),
+    [
+        ("nominal", "identity"),
+        ("interval", "quadratic"),
+        ("ordinal", "ordinal"),
+        ("interval", "linear"),
+        ("interval", "radical"),
+        ("ratio", "ratio"),
+        ("bipolar", "bipolar"),
+        ("interval", "circular"),
+    ],
+)
+def test_irrcac_conger(level: str, weights: str) -> None:
+    raw = pytest.importorskip("irrCAC.raw")
+    for matrix in random_matrices(17, count=10):
+        units_by_raters = pd.DataFrame(as_array(matrix).T)
+        # Ensure every coder column has at least 1 observed rating in the random matrix
+        if units_by_raters.dropna(how="all").isna().all(axis=0).any():
+            continue
+        cac = raw.CAC(units_by_raters, weights=weights, categories=VALUES)
+        est = cac.conger()["est"]
+        study = human_study(matrix, level, VALUES)
+        res = study.kappa(variant="conger", weights=weights)
+        primary = res["as_missing"]
+        assert res.coefficient_name == est["coefficient_name"]
+        assert res.kappa == pytest.approx(est["coefficient_value"], abs=1e-5)
+        assert primary.pa == pytest.approx(est["pa"], abs=1e-5)
+        assert primary.pe == pytest.approx(est["pe"], abs=1e-5)
+        assert primary.se == pytest.approx(est["se"], abs=1e-5)
+        assert primary.z == pytest.approx(est["z"], abs=1e-5)
+        assert primary.p_value == pytest.approx(est["p_value"], abs=1e-5)
+        assert primary.low == pytest.approx(est["confidence_interval"][0], abs=1e-5)
+        assert primary.high == pytest.approx(est["confidence_interval"][1], abs=1e-5)

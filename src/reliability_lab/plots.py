@@ -20,6 +20,8 @@ import numpy.typing as npt
 
 from reliability_lab.exceptions import DesignError
 from reliability_lab.metrics.gwet import GwetResult
+from reliability_lab.metrics.icc import ICCResult
+from reliability_lab.metrics.kappa import KappaResult
 from reliability_lab.report import (
     AlphaEstimate,
     AlphaResult,
@@ -102,7 +104,15 @@ def _save_if_requested(fig: Figure, path: str | os.PathLike[str] | None, t: dict
 
 
 def plot_policy_forest(
-    result: BootstrapResult | ComparisonResult | JackknifeResult | GwetResult | AlphaResult,
+    result: (
+        BootstrapResult
+        | ComparisonResult
+        | JackknifeResult
+        | GwetResult
+        | KappaResult
+        | ICCResult
+        | AlphaResult
+    ),
     *,
     mode: PlotMode = "light",
     ax: Axes | None = None,
@@ -111,9 +121,9 @@ def plot_policy_forest(
     """Plot horizontal confidence intervals across missing-data policies.
 
     Accepts a :class:`BootstrapResult`, :class:`ComparisonResult`,
-    :class:`JackknifeResult`, :class:`GwetResult` (using its analytical intervals),
-    or :class:`AlphaResult` (via ``result.bootstrap()`` when callers pass a bootstrap
-    result, or raises :class:`DesignError` if given an un-bootstrapped ``AlphaResult``).
+    :class:`JackknifeResult`, :class:`GwetResult`, :class:`KappaResult`,
+    :class:`ICCResult` (using their analytical intervals), or :class:`AlphaResult`
+    (raises :class:`DesignError` if given an un-bootstrapped ``AlphaResult``).
     """
     plt = _import_pyplot()
     t = _resolve_tokens(mode)
@@ -150,10 +160,20 @@ def plot_policy_forest(
         xlabel = f"Alpha ({result.measurement}, {result.confidence:.0%} jackknife t-CI)"
         title = f"Coder jackknife policy forest ({result.design})"
     elif isinstance(result, GwetResult):
-        for name, est in result.estimates.items():
-            rows.append((name, est.ac, est.low, est.high))
+        for name, est_g in result.estimates.items():
+            rows.append((name, est_g.ac, est_g.low, est_g.high))
         xlabel = f"Gwet's {result.coefficient_name} ({result.weights_name}, analytical CI)"
         title = f"Gwet's {result.coefficient_name} across missing-data policies ({result.design})"
+    elif isinstance(result, KappaResult):
+        for name, est_k in result.estimates.items():
+            rows.append((name, est_k.kappa, est_k.low, est_k.high))
+        xlabel = f"{result.coefficient_name} ({result.weights_name}, analytical CI)"
+        title = f"{result.coefficient_name} across missing-data policies ({result.design})"
+    elif isinstance(result, ICCResult):
+        for name, est_i in result.estimates.items():
+            rows.append((name, est_i.icc, est_i.low, est_i.high))
+        xlabel = f"{result.code} ({result.model}, {result.agreement}, F-test CI)"
+        title = f"{result.code} across missing-data policies ({result.design})"
     else:
         raise DesignError(f"unsupported result type {type(result).__name__} for plot_policy_forest")
 

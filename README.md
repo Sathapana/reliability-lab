@@ -299,12 +299,14 @@ When `prompt_tokens`, `completion_tokens`, `latency_ms`, or `cost` are supplied 
 
 ## Companion coefficients and plots
 
-Compute Gwet's AC1 (nominal) or AC2 (weighted) alongside Krippendorff's alpha under the same declarations and missing-data policies:
+Compute Gwet's AC1/AC2, Conger's/Fleiss's/Cohen's kappa, Intraclass Correlation Coefficients (`ICC(1,1)`..`ICC(3,k)`), or Generalizability Theory (G-study variance components and D-study projections) alongside Krippendorff's alpha under the same declarations and missing-data policies:
 
 ```python
 gwet_res = study.gwet()  # or study.gwet(weights="ordinal")
-print(gwet_res.summary())
-gwet_boot = gwet_res.bootstrap(n_resamples=2000, method="bca")
+kappa_res = study.kappa(variant="conger")  # or "fleiss", "cohen"
+icc_res = study.icc(model="two_way_random", agreement="agreement", unit="single")
+gt_res = study.g_theory(k=[1, 2, 3, 5, 10])
+print(gt_res.summary())
 ```
 
 With the optional `plot` extra (`pip install "reliability-lab[plot]"`), render policy forest plots, observed-vs-expected coincidence heatmaps, and coder jackknife influence charts:

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+Kappas, Intraclass Correlation Coefficients (ICC), and Generalizability Theory.
+
+- **Kappas (`reliability_lab.metrics`)**: `ReliabilityStudy.kappa(variant="conger" | "fleiss" | "cohen", weights=None, confidence=0.95)` and `kappa(study, ...)` / `compute_kappa(...)`, returning `KappaResult` and `KappaEstimate` across all declared missing-data policies with subject-level linearized standard errors, $t$-intervals, $z$-scores, $p$-values (matching `irrCAC.raw.CAC.conger` and `fleiss`), and `.bootstrap(...)` unit-cluster percentile/BCa intervals.
+- **Intraclass Correlation Coefficients (`reliability_lab.metrics`)**: `ReliabilityStudy.icc(model="two_way_random" | "two_way_mixed" | "one_way", agreement="agreement" | "consistency", unit="single" | "average", complete_case=False, confidence=0.95)` and `icc(study, ...)` / `compute_icc(...)`, returning `ICCResult` and `ICCEstimate` for all six Shrout & Fleiss (1979) / McGraw & Wong (1996) forms (`ICC(1,1)`..`ICC(3,k)`), exact $F$-test confidence intervals, Henderson's Method 1 unbalanced ANOVA decomposition, and `.bootstrap(...)` intervals.
+- **Generalizability Theory (`reliability_lab.metrics`)**: `ReliabilityStudy.g_theory(k=None, complete_case=False)` and `g_theory(study, ...)`, returning `GTheoryResult`, `GTheoryEstimate`, and `VarianceComponents` ($\hat{\sigma}^2_{\text{unit}}, \hat{\sigma}^2_{\text{coder}}, \hat{\sigma}^2_{\text{residual}}$) with D-study projections of generalizability ($E\rho^2(k)$) and dependability ($\Phi(k)$) across rater counts $k$, plus `.bootstrap(...)` intervals.
+
 ## 0.5.0
 
 Companion coefficients and plots.
