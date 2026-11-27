@@ -68,6 +68,13 @@ from reliability_lab.llm import (
     self_enhancement,
     summarize_telemetry,
 )
+from reliability_lab.metrics.gwet import (
+    GwetComputation,
+    GwetEstimate,
+    GwetResult,
+    compute_gwet,
+    resolve_gwet_weights,
+)
 from reliability_lab.report import (
     AlphaEstimate,
     AlphaResult,
@@ -510,6 +517,187 @@ class ReliabilityStudy:
                 coder_names=self._coder_names,
                 coder_families=self._coder_families or None,
             ),
+        )
+
+    def gwet(
+        self,
+        *,
+        weights: str | npt.ArrayLike | None = None,
+        confidence: float = 0.95,
+    ) -> GwetResult:
+        """Compute Gwet's AC1 (nominal) or AC2 (weighted) across all missing-data policies.
+
+        Gwet's AC1 and AC2 are reported as a separate coefficient in :class:`GwetResult`,
+        never as a diagnostic of alpha. By default (``weights=None``), the agreement
+        weights are derived from the study's :class:`Distance` matrix
+        (``w = 1 - delta² / max(delta²)``), which gives ``"identity"`` (AC1) for
+        nominal data, ``"quadratic"`` for interval data, and the corresponding Gwet
+        weights for ratio, bipolar, and circular data. Pass ``weights="ordinal"``,
+        ``"linear"``, ``"radical"``, ``"quadratic"``, ``"identity"``, ``"ratio"``,
+        ``"bipolar"``, ``"circular"``, or a custom ``V x V`` weight matrix to override.
+        """
+        if self._design in SINGLE_CONFIGURATION and len(self._configurations) > 1:
+            keys = [k for k in self._configurations[0] if k != "_configuration"]
+            raise DesignError(
+                f"design={self._design.value!r} cannot pool rows across the "
+                f"{len(self._configurations)} present "
+                f"configurations ({', '.join(keys)}: {preview(self._configurations)}), and "
+                f"{self._design.value} is measured on one. Compare them with "
+                "study.compare(a=..., b=...), or filter the ratings to one configuration."
+            )
+        base = self._value_idx >= 0
+        reference = self._compute(self._unit_codes[base], self._value_idx[base], self._values)
+        w_name, w_mat = resolve_gwet_weights(
+            weights, self._values, self._distance, reference.components.marginals
+        )
+        ref_gwet = compute_gwet(
+            self._unit_codes[base],
+            self._value_idx[base],
+            self._values,
+            w_mat,
+            weights_name=w_name,
+            confidence=confidence,
+        )
+        estimates: dict[str, GwetEstimate] = {}
+        inputs: dict[str, EstimateInput] = {}
+        for policy in self._policies:
+            if policy == "as_missing":
+                estimates["as_missing"] = self._gwet_estimate("as_missing", ref_gwet)
+                inputs["as_missing"] = EstimateInput(
+                    self._unit_codes[base],
+                    self._value_idx[base],
+                    self._values,
+                    self._coder_codes[base],
+                )
+            elif policy == "as_category":
+                values_cat = (*self._values, ERROR_CATEGORY)
+                codes = self._value_idx.copy()
+                codes[self._is_error] = len(self._values)
+                keep = codes >= 0
+                w_cat = np.eye(len(values_cat), dtype=float)
+                comp_cat = compute_gwet(
+                    self._unit_codes[keep],
+                    codes[keep],
+                    values_cat,
+                    w_cat,
+                    weights_name="identity",
+                    confidence=confidence,
+                )
+                estimates["as_category"] = self._gwet_estimate("as_category", comp_cat)
+                inputs["as_category"] = EstimateInput(
+                    self._unit_codes[keep], codes[keep], values_cat, self._coder_codes[keep]
+                )
+            else:
+                for variant in ("pessimistic", "optimistic"):
+                    codes, n_imputed, n_unanchored = self._impute(reference, variant)
+                    keep = codes >= 0
+                    comp_alpha = self._compute(self._unit_codes[keep], codes[keep], self._values)
+                    var_w_name, var_w_mat = resolve_gwet_weights(
+                        weights, self._values, self._distance, comp_alpha.components.marginals
+                    )
+                    comp_var = compute_gwet(
+                        self._unit_codes[keep],
+                        codes[keep],
+                        self._values,
+                        var_w_mat,
+                        weights_name=var_w_name,
+                        confidence=confidence,
+                    )
+                    name = f"sensitivity_{variant}"
+                    inputs[name] = EstimateInput(
+                        self._unit_codes[keep], codes[keep], self._values, self._coder_codes[keep]
+                    )
+                    estimates[name] = self._gwet_estimate(
+                        "sensitivity",
+                        comp_var,
+                        name=name,
+                        n_imputed=n_imputed,
+                        n_unanchored=n_unanchored,
+                    )
+
+        primary = estimates["as_missing"]
+        if not primary.defined:
+            raise UndefinedAlphaError(
+                f"Gwet's {primary.coefficient_name} is undefined for these data: "
+                f"{primary.undefined_reason}"
+            )
+
+        recorded = list(self._warnings)
+        notes = list(self._notes)
+        if not self._is_error.any() and len(self._policies) > 1:
+            notes.append(
+                "No counted rating is a failed attempt, so every missing-data policy coincides."
+            )
+        if self._split is not None:
+            manifest, partition = self._split
+            notes.append(
+                f"These are the {partition} units of a {manifest.level}-level split "
+                f"(fold {manifest.fold} of {manifest.n_folds}, {manifest.splitter_class})."
+            )
+            notes.extend(self._split_notes)
+        if self._retries is not None:
+            notes.append(
+                f"Retries: {self._n_retried} calls had several attempts; the "
+                f"{'last' if self._retries == 'last' else 'first observed'} attempt is counted."
+            )
+
+        return GwetResult(
+            design=self._design.value,
+            measurement=self._distance.name,
+            values=self._values,
+            coders=self._coders.by,
+            missing_policies=self._policies,
+            abstain_as=self._abstain_as,
+            inapplicable_as=self._inapplicable_as,
+            estimates=estimates,
+            coverage=self._coverage(),
+            warnings=tuple(recorded),
+            notes=tuple(notes),
+            provenance=self._provenance(),
+            _sample=StudySample(
+                unit_labels=self._unit_labels,
+                unit_groups=self._unit_groups,
+                unit_strata=self._unit_strata,
+                distance=self._distance,
+                inputs=inputs,
+                coder_names=self._coder_names,
+                coder_families=self._coder_families or None,
+            ),
+            _weights_spec=weights,
+        )
+
+    def _gwet_estimate(
+        self,
+        policy: str,
+        computed: GwetComputation,
+        *,
+        name: str | None = None,
+        n_imputed: int = 0,
+        n_unanchored: int = 0,
+    ) -> GwetEstimate:
+        labels = list(computed.values)
+        return GwetEstimate(
+            name=policy if name is None else name,
+            policy=policy,
+            coefficient_name=computed.coefficient_name,
+            weights_name=computed.weights_name,
+            ac=computed.ac,
+            pa=computed.pa,
+            pe=computed.pe,
+            se=computed.se,
+            low=computed.low,
+            high=computed.high,
+            z=computed.z,
+            p_value=computed.p_value,
+            confidence=computed.confidence,
+            n_units=computed.n_units,
+            n_pairable_units=computed.n_pairable_units,
+            n_ratings=computed.n_ratings,
+            values=computed.values,
+            weights_matrix=pd.DataFrame(computed.weights_matrix, index=labels, columns=labels),
+            undefined_reason=computed.undefined_reason,
+            n_imputed=n_imputed,
+            n_unanchored=n_unanchored,
         )
 
     def compare(

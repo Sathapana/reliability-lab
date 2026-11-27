@@ -40,6 +40,7 @@ dependencies = [
 [project.optional-dependencies]
 sklearn = ["scikit-learn>=1.4"]
 parquet = ["pyarrow>=16"]
+plot = ["matplotlib>=3.8"]
 
 [project.scripts]
 reliability-lab = "reliability_lab.cli:main"
@@ -60,6 +61,7 @@ dev = [
     # Exercise the optional extras in tests; they stay optional at runtime.
     "scikit-learn>=1.4",
     "pyarrow>=16",
+    "matplotlib>=3.8",
 ]
 # Reference implementations used only by the parity tests. `krippendorff` is
 # GPL-licensed, so it must never become a runtime dependency. `irrCAC` is not

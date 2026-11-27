@@ -12,7 +12,7 @@ import json
 import math
 import os
 import warnings
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -624,25 +624,28 @@ class BootstrapResult:
 
     def summary(self) -> str:
         with_min = self.alpha_min is not None
+        bars = format_interval_bars(self.intervals, reference=self.alpha_min)
         lines = [
             f"Bootstrap intervals | design: {self.design} | measurement: {self.measurement}",
             self.describe(),
             "",
             f"{'estimate':<26}{'alpha':>8}{'low':>9}{'high':>9}{'failed':>8}"
-            + (f"{'P(<min)':>9}" if with_min else ""),
+            + (f"{'P(<min)':>9}" if with_min else "")
+            + f"  {'interval':<26}",
         ]
         for i in self.intervals.values():
             p = i.p_below_min if i.p_below_min is not None else math.nan
             lines.append(
                 f"{i.estimate:<26}{_fmt(i.point):>8}{_fmt(i.low):>9}{_fmt(i.high):>9}"
-                f"{i.n_failed:>8}" + (f"{_fmt(p):>9}" if with_min else "")
+                f"{i.n_failed:>8}" + (f"{_fmt(p):>9}" if with_min else "") + f"  {bars[i.estimate]}"
             )
         if self.family_intervals:
+            fam_bars = format_interval_bars(self.family_intervals, reference=0.0)
             lines.append("\nFamily intervals (paired with as_missing)")
             for i in self.family_intervals.values():
                 lines.append(
                     f"  {i.estimate:<24}{_fmt(i.point):>8}{_fmt(i.low):>9}{_fmt(i.high):>9}"
-                    f"{i.n_failed:>8}"
+                    f"{i.n_failed:>8}  {fam_bars[i.estimate]}"
                 )
         lines.extend(_interval_footnotes(self.intervals.values()))
         lines.extend(_interval_footnotes(self.family_intervals.values()))
@@ -783,6 +786,10 @@ class ComparisonResult:
         )
 
     def summary(self) -> str:
+        ref_line = (
+            -self.margin if self.test == "non_inferiority" and self.margin is not None else 0.0
+        )
+        bars = format_interval_bars(self.differences, reference=ref_line)
         lines = [
             f"Paired comparison (claim: {self.claim}) | design: {self.design} | "
             f"measurement: {self.measurement}",
@@ -803,6 +810,7 @@ class ComparisonResult:
         )
         if self.test is not None:
             header += f"  {'verdict':<15}{'p':>7}"
+        header += f"  {'interval':<26}"
         lines += ["", header]
         for name, d in self.differences.items():
             line = (
@@ -811,6 +819,7 @@ class ComparisonResult:
             )
             if self.test is not None:
                 line += f"  {self.verdicts[name]:<15}{_fmt(self.p_values[name]):>7}"
+            line += f"  {bars[name]}"
             lines.append(line)
         lines.extend(_interval_footnotes(self.differences.values()))
         telem = self.telemetry_table()
@@ -915,6 +924,73 @@ class JackknifeResult:
                 )
         _append_warnings_and_notes(lines, self.warnings, self.notes)
         return "\n".join(lines)
+
+
+def format_interval_bars(
+    intervals: Mapping[str, Interval] | Sequence[Interval],
+    *,
+    width: int = 24,
+    domain: tuple[float, float] | None = None,
+    reference: float | None = None,
+) -> dict[str, str]:
+    """Render compact fixed-width text interval bars (e.g. ``|───●───|``) across estimates.
+
+    ``width`` is the number of interior characters between the outer ``|`` borders.
+    When ``domain`` is omitted, the shared horizontal range spans all finite ``low``,
+    ``point``, ``high`` values (and ``reference`` when given), padded slightly when
+    all points collapse to a single value.
+    """
+    if width < 4:
+        raise ValueError(f"width must be at least 4, got {width}")
+    items = list(intervals.values()) if isinstance(intervals, Mapping) else list(intervals)
+    if domain is not None:
+        lo_axis, hi_axis = float(domain[0]), float(domain[1])
+    else:
+        coords: list[float] = []
+        for i in items:
+            for v in (i.low, i.point, i.high):
+                if math.isfinite(v):
+                    coords.append(float(v))
+        if reference is not None and math.isfinite(reference):
+            coords.append(float(reference))
+        if not coords:
+            return {i.estimate: "|" + (" " * width) + "|" for i in items}
+        lo_axis, hi_axis = min(coords), max(coords)
+        if math.isclose(lo_axis, hi_axis, abs_tol=1e-12):
+            lo_axis -= 0.05
+            hi_axis += 0.05
+        else:
+            pad = 0.04 * (hi_axis - lo_axis)
+            lo_axis -= pad
+            hi_axis += pad
+
+    span = hi_axis - lo_axis
+    if span <= 0 or not math.isfinite(span):
+        return {i.estimate: "|" + (" " * width) + "|" for i in items}
+
+    def _pos(val: float) -> int:
+        scaled = (val - lo_axis) / span
+        clamped = min(1.0, max(0.0, scaled))
+        return round(clamped * (width - 1))
+
+    ref_idx: int | None = None
+    if reference is not None and math.isfinite(reference) and lo_axis <= reference <= hi_axis:
+        ref_idx = _pos(reference)
+
+    out: dict[str, str] = {}
+    for i in items:
+        chars = [" "] * width
+        if ref_idx is not None:
+            chars[ref_idx] = ":"
+        if math.isfinite(i.low) and math.isfinite(i.high):
+            c_lo = _pos(min(i.low, i.high))
+            c_hi = _pos(max(i.low, i.high))
+            for idx in range(c_lo, c_hi + 1):
+                chars[idx] = "─"
+        if math.isfinite(i.point):
+            chars[_pos(i.point)] = "●"
+        out[i.estimate] = "|" + "".join(chars) + "|"
+    return out
 
 
 def _interval_footnotes(intervals: Iterable[Interval]) -> list[str]:

@@ -297,6 +297,24 @@ print(res.telemetry)
 
 When `prompt_tokens`, `completion_tokens`, `latency_ms`, or `cost` are supplied on `RatingFrame.from_long(...)`, `AlphaResult.telemetry` summarizes totals and per-counted-rating averages per coder across all recorded attempts (including retries).
 
+## Companion coefficients and plots
+
+Compute Gwet's AC1 (nominal) or AC2 (weighted) alongside Krippendorff's alpha under the same declarations and missing-data policies:
+
+```python
+gwet_res = study.gwet()  # or study.gwet(weights="ordinal")
+print(gwet_res.summary())
+gwet_boot = gwet_res.bootstrap(n_resamples=2000, method="bca")
+```
+
+With the optional `plot` extra (`pip install "reliability-lab[plot]"`), render policy forest plots, observed-vs-expected coincidence heatmaps, and coder jackknife influence charts:
+
+```python
+rl.plot_policy_forest(boot, mode="light", path="policy_forest.png")
+rl.plot_coincidence(result, view="side_by_side", path="coincidence.png")
+rl.plot_coder_influence(result, path="coder_influence.png")
+```
+
 ## Licence
 
 BSD-3-Clause. Alpha is implemented independently from Krippendorff's papers. The GPL-licensed `krippendorff` package is used only in the test suite, as a parity check.

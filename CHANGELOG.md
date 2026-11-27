@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+Companion coefficients and plots.
+
+- **`reliability_lab.metrics` (Gwet's AC1 and AC2)**: `ReliabilityStudy.gwet(weights=None)` and `gwet(study)` / `compute_gwet(...)`, returning `GwetResult` and `GwetEstimate` across all declared missing-data policies (`as_missing`, `as_category`, `sensitivity_pessimistic`, `sensitivity_optimistic`) with Gwet's linearized standard error, $t$-interval, $z$-score, $p$-value, and `.bootstrap(...)` unit-cluster percentile/BCa intervals.
+- **Core text interval bars**: `format_interval_bars(...)` and inline Unicode interval bars on each policy row in `BootstrapResult.summary()` and `ComparisonResult.summary()`.
+- **`plot` optional extra (`reliability_lab.plots`)**: `plot_policy_forest`, `plot_coincidence` (`side_by_side` and `residual` views), and `plot_coder_influence` with `"light"` and `"dark"` palettes.
+
 ## 0.4.0
 
 Judge bias evidence and call telemetry.

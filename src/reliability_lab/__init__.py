@@ -18,12 +18,14 @@ from reliability_lab.exceptions import (
     UndefinedAlphaError,
 )
 from reliability_lab.llm import TraceSidecar, UnitSidecar
+from reliability_lab.metrics import GwetEstimate, GwetResult, compute_gwet, gwet
 from reliability_lab.planning import (
     SampleSizePlan,
     plan_alpha,
     plan_krippendorff,
     plan_non_inferiority,
 )
+from reliability_lab.plots import plot_coder_influence, plot_coincidence, plot_policy_forest
 from reliability_lab.report import (
     AlphaEstimate,
     AlphaResult,
@@ -34,6 +36,7 @@ from reliability_lab.report import (
     Interval,
     JackknifeResult,
     Provenance,
+    format_interval_bars,
 )
 from reliability_lab.simulate import simulate_ratings
 from reliability_lab.split import SplitManifest
@@ -60,6 +63,8 @@ __all__ = [
     "Distance",
     "DomainSizeWarning",
     "Fold",
+    "GwetEstimate",
+    "GwetResult",
     "Interval",
     "JackknifeResult",
     "LeakageError",
@@ -78,8 +83,14 @@ __all__ = [
     "UnitSidecar",
     "__version__",
     "circular",
+    "compute_gwet",
+    "format_interval_bars",
+    "gwet",
     "plan_alpha",
     "plan_krippendorff",
     "plan_non_inferiority",
+    "plot_coder_influence",
+    "plot_coincidence",
+    "plot_policy_forest",
     "simulate_ratings",
 ]

@@ -93,3 +93,44 @@ def test_irrcac(level: str, weights: str) -> None:
         expected = cac.krippendorff()["est"]["coefficient_value"]
         # irrCAC rounds its estimates to five decimals.
         assert ours(matrix, level, VALUES) == pytest.approx(expected, abs=1e-5)
+
+
+@pytest.mark.parametrize(
+    ("level", "weights"),
+    [
+        ("nominal", "identity"),
+        ("interval", "quadratic"),
+        ("ordinal", "ordinal"),
+        ("interval", "linear"),
+        ("interval", "radical"),
+        ("ratio", "ratio"),
+        ("bipolar", "bipolar"),
+        ("interval", "circular"),
+    ],
+)
+def test_irrcac_gwet(level: str, weights: str) -> None:
+    raw = pytest.importorskip("irrCAC.raw")
+    for matrix in random_matrices(15, count=10):
+        units_by_raters = pd.DataFrame(as_array(matrix).T)
+        cac = raw.CAC(units_by_raters, weights=weights, categories=VALUES)
+        est = cac.gwet()["est"]
+        study = human_study(matrix, level, VALUES)
+        res = study.gwet(weights=weights)
+        primary = res["as_missing"]
+        assert res.coefficient_name == est["coefficient_name"]
+        assert res.ac == pytest.approx(est["coefficient_value"], abs=1e-5)
+        assert primary.pa == pytest.approx(est["pa"], abs=1e-5)
+        assert primary.pe == pytest.approx(est["pe"], abs=1e-5)
+        assert primary.se == pytest.approx(est["se"], abs=1e-5)
+        assert primary.z == pytest.approx(est["z"], abs=1e-5)
+        assert primary.p_value == pytest.approx(est["p_value"], abs=1e-5)
+        assert primary.low == pytest.approx(est["confidence_interval"][0], abs=1e-5)
+        assert primary.high == pytest.approx(est["confidence_interval"][1], abs=1e-5)
+        if (level, weights) in (
+            ("nominal", "identity"),
+            ("interval", "quadratic"),
+            ("ratio", "ratio"),
+            ("bipolar", "bipolar"),
+        ):
+            res_default = study.gwet()
+            assert res_default.ac == pytest.approx(est["coefficient_value"], abs=1e-5)
